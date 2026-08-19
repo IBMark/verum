@@ -1,0 +1,910 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Axiom System Map</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7; --surface: #fcfcfb;
+    --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --baseline: #c3c2b7;
+    --ring: rgba(11,11,11,0.10);
+    --accent: #2a78d6;
+    --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+    --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100;
+    --s5:#e87ba4; --s6:#008300; --s7:#4a3aa7; --s8:#e34948;
+    --edge: rgba(11,11,11,0.14); --seam: #c026a8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface: #1a1a19;
+      --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --baseline: #383835;
+      --ring: rgba(255,255,255,0.10);
+      --accent: #3987e5;
+      --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500;
+      --s5:#d55181; --s6:#008300; --s7:#9085e9; --s8:#e66767;
+      --edge: rgba(255,255,255,0.14); --seam: #e05bc4;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19;
+    --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --baseline: #383835;
+    --ring: rgba(255,255,255,0.10);
+    --accent: #3987e5;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500;
+    --s5:#d55181; --s6:#008300; --s7:#9085e9; --s8:#e66767;
+    --edge: rgba(255,255,255,0.14); --seam: #e05bc4;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--page); color: var(--ink);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column; padding: 16px 20px; gap: 12px;
+  }
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 18px; font-weight: 700; }
+  .sub { color: var(--ink-2); font-size: 13px; }
+  .sub b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  #theme-toggle {
+    margin-left: auto; border: 1px solid var(--ring); background: var(--surface);
+    color: var(--ink-2); border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; font-size: 12px;
+  }
+  nav { display: flex; gap: 6px; flex-wrap: wrap; }
+  nav button {
+    border: 1px solid var(--ring); background: var(--surface); color: var(--ink-2);
+    border-radius: 999px; padding: 4px 14px; cursor: pointer; font: inherit; font-size: 12.5px;
+  }
+  nav button.active { border-color: var(--accent); color: var(--ink); font-weight: 600; }
+  main { flex: 1; min-height: 0; display: flex; gap: 12px; }
+  .view { flex: 1; min-width: 0; min-height: 0; display: none; }
+  .view.active { display: flex; }
+
+  /* Graph view */
+  #graph-view { position: relative; }
+  #canvas-wrap { flex: 1; min-width: 0; position: relative; background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; overflow: hidden; }
+  canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+  canvas.dragging { cursor: grabbing; }
+  #tooltip {
+    position: absolute; pointer-events: none; display: none;
+    background: var(--surface); border: 1px solid var(--ring); border-radius: 6px;
+    padding: 6px 10px; font-size: 12px; max-width: 320px; box-shadow: 0 4px 14px rgba(0,0,0,.15);
+  }
+  #tooltip .path { font-family: ui-monospace, monospace; font-size: 11.5px; word-break: break-all; }
+  #tooltip .meta { color: var(--muted); }
+  #legend {
+    position: absolute; left: 10px; bottom: 10px; display: flex; gap: 12px; flex-wrap: wrap;
+    background: color-mix(in oklab, var(--surface) 88%, transparent); border: 1px solid var(--ring);
+    border-radius: 6px; padding: 5px 10px; font-size: 11.5px; color: var(--ink-2);
+  }
+  #legend .sw { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; }
+  #graph-hint { position: absolute; right: 10px; top: 10px; color: var(--muted); font-size: 11.5px; }
+
+  aside {
+    width: 340px; flex: none; background: var(--surface); border: 1px solid var(--ring);
+    border-radius: 10px; padding: 14px; overflow-y: auto; display: none;
+  }
+  aside.open { display: block; }
+  aside h3 { font-size: 13px; word-break: break-all; font-family: ui-monospace, monospace; }
+  aside .meta { color: var(--muted); font-size: 12px; margin: 4px 0 10px; }
+  aside h4 { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 12px 0 4px; }
+  aside ul { list-style: none; }
+  aside li { padding: 2px 0; font-size: 12.5px; }
+  aside li a { color: var(--accent); text-decoration: none; cursor: pointer; }
+  aside li a:hover, aside li a:focus { text-decoration: underline; }
+  aside .badge { display: inline-block; font-size: 10.5px; font-weight: 600; border-radius: 4px; padding: 0 6px; margin-left: 6px; }
+  .badge.entry { color: var(--good); border: 1px solid var(--good); }
+  .badge.sink { color: var(--critical); border: 1px solid var(--critical); }
+  aside .close { float: right; border: none; background: none; color: var(--muted); cursor: pointer; font-size: 15px; }
+
+  /* Tables */
+  .tablewrap { flex: 1; min-height: 0; overflow: auto; background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 12px; border-top: 1px solid var(--grid); vertical-align: top; }
+  thead th { position: sticky; top: 0; background: var(--surface); border-top: none; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; }
+  th.num { text-align: right; }
+  td.mono { font-family: ui-monospace, monospace; font-size: 12px; color: var(--ink-2); word-break: break-all; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: color-mix(in oklab, var(--accent) 6%, transparent); }
+  .toolbar { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
+  .toolbar input {
+    border: 1px solid var(--ring); background: var(--surface); color: var(--ink);
+    border-radius: 6px; padding: 5px 10px; font: inherit; font-size: 13px; flex: 1; max-width: 420px;
+  }
+  .col { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+
+  /* Flow cards */
+  #flows-view .col, #cycles-view .col { overflow-y: auto; gap: 10px; }
+  .card { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 12px 14px; }
+  .card .head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .sev { font-size: 11px; font-weight: 700; letter-spacing: .03em; }
+  .sev.Critical { color: var(--critical); } .sev.High { color: var(--serious); }
+  .sev.Medium { color: var(--warning); } .sev.Low, .sev.Info { color: var(--muted); }
+  .card .msg { font-size: 13px; }
+  .hops { margin-top: 8px; border-left: 2px solid var(--grid); padding-left: 12px; display: flex; flex-direction: column; gap: 3px; }
+  .hop { font-size: 12px; color: var(--ink-2); }
+  .hop .loc { font-family: ui-monospace, monospace; font-size: 11.5px; color: var(--muted); }
+  .empty { color: var(--muted); padding: 24px; text-align: center; }
+  .pillrow { display: flex; gap: 6px; flex-wrap: wrap; }
+  .mw { display: inline-block; padding: 0 7px; border: 1px solid var(--ring); border-radius: 999px; font-size: 11px; color: var(--ink-2); }
+  #graph-controls label { display: inline-flex; gap: 5px; align-items: center; }
+  #graph-controls select { border: 1px solid var(--ring); background: var(--surface); color: var(--ink); border-radius: 6px; padding: 2px 6px; font: inherit; font-size: 12px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .tile { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 12px 14px; }
+  .tile .label { color: var(--muted); font-size: 12px; }
+  .tile .value { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .tile .value small { font-size: 12px; font-weight: 400; color: var(--muted); }
+  .tile .value.bad { color: var(--critical); } .tile .value.warn { color: var(--warning); } .tile .value.ok { color: var(--good); }
+  .panelgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+  .scatter { width: 100%; height: 230px; display: block; }
+  aside .impact { margin-top: 4px; padding: 6px 8px; border: 1px solid var(--ring); border-radius: 6px; font-size: 12px; color: var(--ink-2); }
+  aside .impact b { color: var(--ink); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Axiom System Map</h1>
+  <span class="sub" id="meta-line"></span>
+  <button id="theme-toggle" type="button">Theme</button>
+</header>
+<nav id="tabs">
+  <button data-view="graph" class="active">Module graph</button>
+  <button data-view="architecture">Architecture</button>
+  <button data-view="performance">Performance</button>
+  <button data-view="symbols">Symbols</button>
+  <button data-view="flows">Data flows</button>
+  <button data-view="cycles">Cycles</button>
+  <button data-view="routes">Routes</button>
+</nav>
+<div id="graph-controls" style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;font-size:12px;color:var(--ink-2)">
+  <label>Size <select id="size-mode"><option value="rank">centrality</option><option value="degree">degree</option><option value="symbols">symbols</option></select></label>
+  <label>Color <select id="color-mode"><option value="lang">language</option><option value="community">community</option><option value="layer">layer</option><option value="instab">instability</option></select></label>
+  <label>Layout <select id="layout-mode"><option value="force">force</option><option value="layered">layered</option></select></label>
+  <span class="sub" id="graph-note"></span>
+</div>
+<main>
+  <div class="view active" id="graph-view">
+    <div id="canvas-wrap">
+      <canvas id="canvas"></canvas>
+      <div id="tooltip"></div>
+      <div id="legend"></div>
+      <div id="graph-hint">drag to pan · wheel to zoom · click a module</div>
+    </div>
+    <aside id="panel"></aside>
+  </div>
+
+  <div class="view" id="architecture-view"><div class="col" id="arch-body" style="overflow-y:auto;gap:16px"></div></div>
+
+  <div class="view" id="performance-view">
+    <div class="col" style="gap:10px">
+      <div class="filters" id="obj-chips" style="margin-bottom:0"></div>
+      <div class="sub" id="perf-note"></div>
+      <div class="col" id="perf-body" style="overflow-y:auto;gap:8px"></div>
+    </div>
+  </div>
+
+  <div class="view" id="symbols-view">
+    <div class="col">
+      <div class="toolbar">
+        <input id="sym-search" type="search" placeholder="Search symbols by name, kind, or file…">
+        <span class="sub" id="sym-count"></span>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Symbol</th><th>Kind</th><th>Module</th><th class="num">In</th><th class="num">Out</th><th></th></tr></thead>
+          <tbody id="sym-rows"></tbody>
+        </table>
+      </div>
+    </div>
+    <aside id="sym-panel"></aside>
+  </div>
+
+  <div class="view" id="flows-view"><div class="col" id="flow-cards"></div></div>
+  <div class="view" id="cycles-view"><div class="col" id="cycle-cards"></div></div>
+
+  <div class="view" id="routes-view">
+    <div class="col">
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Method</th><th>Path</th><th>Middleware</th><th>Defined at</th><th>Controller</th></tr></thead>
+          <tbody id="route-rows"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script id="axiom-map-data" type="application/json">__AXIOM_MAP_DATA__</script>
+<script>
+(function () {
+  "use strict";
+  const D = JSON.parse(document.getElementById("axiom-map-data").textContent);
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  document.getElementById("theme-toggle").addEventListener("click", () => {
+    const root = document.documentElement;
+    const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+    const cur = root.dataset.theme || (dark ? "dark" : "light");
+    root.dataset.theme = cur === "dark" ? "light" : "dark";
+    draw();
+  });
+
+  const pct = D.meta.calls ? Math.round((100 * D.meta.resolved_calls) / D.meta.calls) : 0;
+  document.getElementById("meta-line").innerHTML =
+    `<b>${D.modules.length}</b> modules · <b>${D.symbols.length}</b> symbols · <b>${D.meta.calls.toLocaleString()}</b> calls (${pct}% resolved) · <b>${D.chains.length + D.taints.length}</b> flows · <b>${D.cycles.length}</b> cycles`;
+
+  // Language → fixed categorical slot (identity coloring; never cycled).
+  const LANG_SLOT = { Php: "--s1", Rust: "--s2", JavaScript: "--s3", TypeScript: "--s4", Python: "--s5", Go: "--s6", Kubernetes: "--s7", Terraform: "--s8", Docker: "--s8", Unknown: "--muted" };
+  const SLOTS = ["--s1","--s2","--s3","--s4","--s5","--s6","--s7","--s8"];
+  const langsPresent = [...new Set(D.modules.map((m) => m.lang))];
+  const modeState = { size: "rank", color: "lang", layout: "force" };
+
+  function nodeColor(m) {
+    if (modeState.color === "lang") return css(LANG_SLOT[m.lang] || "--muted");
+    if (modeState.color === "community") return css(SLOTS[m.community % SLOTS.length]);
+    if (modeState.color === "layer") {
+      // Sequential single-hue blue ramp by layer depth.
+      const t = D.analytics.module_depth ? m.layer / D.analytics.module_depth : 0;
+      const c1 = [201,226,251], c2 = [13,54,107];
+      const mix = c1.map((v, i) => Math.round(v + (c2[i] - v) * t));
+      return `rgb(${mix.join(",")})`;
+    }
+    // instability: green (stable) → red (unstable)
+    const t = m.instability;
+    return `rgb(${Math.round(12 + t * 196)},${Math.round(163 - t * 100)},${Math.round(12)})`;
+  }
+  function nodeRadius(m) {
+    if (modeState.size === "rank") return 5 + 22 * Math.sqrt(m.rank);
+    if (modeState.size === "degree") return 5 + 2.4 * Math.sqrt((m.ca + m.ce) + 1);
+    return 5 + 2.2 * Math.sqrt(m.symbols + 1);
+  }
+  function refreshLegend() {
+    const el = document.getElementById("legend");
+    if (modeState.color === "lang") {
+      el.innerHTML = langsPresent.map((l) => `<span><span class="sw" style="background:var(${LANG_SLOT[l] || "--muted"})"></span>${l}</span>`).join("");
+    } else if (modeState.color === "community") {
+      el.innerHTML = `<span>${D.analytics.communities} communities</span>`;
+    } else if (modeState.color === "layer") {
+      el.innerHTML = `<span>layer 0<span class="sw" style="background:rgb(201,226,251);margin:0 4px"></span>→<span class="sw" style="background:rgb(13,54,107);margin:0 4px"></span>${D.analytics.module_depth}</span>`;
+    } else {
+      el.innerHTML = `<span>stable<span class="sw" style="background:rgb(12,163,12);margin:0 4px"></span>→<span class="sw" style="background:rgb(208,63,12);margin:0 4px"></span>unstable</span>`;
+    }
+  }
+  refreshLegend();
+
+  // ------- Tabs -------
+  const tabs = document.getElementById("tabs");
+  const controls = document.getElementById("graph-controls");
+  tabs.addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    tabs.querySelectorAll("button").forEach((x) => x.classList.toggle("active", x === b));
+    document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === b.dataset.view + "-view"));
+    controls.style.display = b.dataset.view === "graph" ? "flex" : "none";
+    if (b.dataset.view === "graph") resize();
+    if (b.dataset.view === "architecture") renderArchitecture();
+    if (b.dataset.view === "performance") renderPerformance();
+  });
+
+  // ------- Symbol helpers -------
+  const callersOf = new Map(), calleesOf = new Map();
+  for (const [a, b] of D.sym_edges) {
+    if (!calleesOf.has(a)) calleesOf.set(a, []);
+    if (!callersOf.has(b)) callersOf.set(b, []);
+    calleesOf.get(a).push(b); callersOf.get(b).push(a);
+  }
+  const symLabel = (i) => {
+    const s = D.symbols[i];
+    return `<a data-sym="${i}">${esc(s.fq)}</a>` +
+      (s.entry ? '<span class="badge entry">entry</span>' : "") +
+      (s.sink ? `<span class="badge sink">${esc(s.sink)}</span>` : "");
+  };
+
+  function symbolDetailHTML(i) {
+    const s = D.symbols[i];
+    const list = (arr) => arr && arr.length
+      ? `<ul>${arr.slice(0, 40).map((j) => `<li>${symLabel(j)}</li>`).join("")}${arr.length > 40 ? `<li class="sub">… ${arr.length - 40} more</li>` : ""}</ul>`
+      : '<ul><li class="sub">none mapped</li></ul>';
+    return `
+      <h3>${esc(s.fq)}</h3>
+      <div class="meta">${esc(s.kind)} · ${esc(D.modules[s.module].path)}:${s.line}
+        ${s.entry ? '<span class="badge entry">entry</span>' : ""}
+        ${s.sink ? `<span class="badge sink">${esc(s.sink)}</span>` : ""}
+        ${s.reachable ? "" : '<span class="badge sink">unreachable</span>'}</div>
+      <div class="meta">PageRank ${(s.rank).toFixed(3)}</div>
+      ${impactHTML(i)}
+      <h4>Called by (${(callersOf.get(i) || []).length})</h4>${list(callersOf.get(i))}
+      <h4>Calls (${(calleesOf.get(i) || []).length})</h4>${list(calleesOf.get(i))}`;
+  }
+
+  // ------- Module graph (canvas force layout) -------
+  const canvas = document.getElementById("canvas");
+  const wrap = document.getElementById("canvas-wrap");
+  const tooltip = document.getElementById("tooltip");
+  const panel = document.getElementById("panel");
+  const ctx = canvas.getContext("2d");
+
+  const N = D.modules.length;
+  const nodes = D.modules.map((m, i) => ({
+    i,
+    x: Math.cos((2 * Math.PI * i) / N) * 260 + (i % 7) * 3,
+    y: Math.sin((2 * Math.PI * i) / N) * 260 + (i % 5) * 3,
+    vx: 0, vy: 0,
+    get r() { return nodeRadius(D.modules[this.i]); },
+  }));
+  const edges = D.module_edges.map(([a, b, w]) => ({ a, b, w }));
+  const seamEdges = (D.seam_edges || []).map(([a, b, w]) => ({ a, b, w }));
+  const inCycle = new Set(D.cycles.flat());
+  // Modules that sit on a cross-language seam (either end) — badged in the graph.
+  const onSeam = new Set(seamEdges.flatMap((e) => [e.a, e.b]));
+
+  let view = { tx: 0, ty: 0, k: 1 };
+  let hover = -1, selected = -1, alpha = reduceMotion ? 0 : 1;
+
+  function step() {
+    // Repulsion
+    for (let i = 0; i < N; i++) {
+      const a = nodes[i];
+      for (let j = i + 1; j < N; j++) {
+        const b = nodes[j];
+        let dx = a.x - b.x, dy = a.y - b.y;
+        let d2 = dx * dx + dy * dy || 1;
+        if (d2 > 90000) continue;
+        const f = 900 / d2;
+        const d = Math.sqrt(d2);
+        dx /= d; dy /= d;
+        a.vx += dx * f; a.vy += dy * f;
+        b.vx -= dx * f; b.vy -= dy * f;
+      }
+      // Gravity to center
+      a.vx -= a.x * 0.003; a.vy -= a.y * 0.003;
+    }
+    // Springs
+    for (const e of edges) {
+      const a = nodes[e.a], b = nodes[e.b];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const d = Math.sqrt(dx * dx + dy * dy) || 1;
+      const target = 90 + a.r + b.r;
+      const f = ((d - target) / d) * 0.02 * Math.min(3, Math.log2(1 + e.w));
+      a.vx += dx * f; a.vy += dy * f;
+      b.vx -= dx * f; b.vy -= dy * f;
+    }
+    // Seam springs — pull the frontend and backend clusters together so the
+    // cross-language wires are readable rather than stretched across the canvas.
+    for (const e of seamEdges) {
+      const a = nodes[e.a], b = nodes[e.b];
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const d = Math.sqrt(dx * dx + dy * dy) || 1;
+      const target = 120 + a.r + b.r;
+      const f = ((d - target) / d) * 0.03 * Math.min(3, Math.log2(1 + e.w));
+      a.vx += dx * f; a.vy += dy * f;
+      b.vx -= dx * f; b.vy -= dy * f;
+    }
+    for (const n of nodes) {
+      n.x += n.vx * alpha; n.y += n.vy * alpha;
+      n.vx *= 0.6; n.vy *= 0.6;
+    }
+    alpha = Math.max(0, alpha - 0.0012);
+  }
+  // Pre-run so the first paint is already settled.
+  for (let i = 0; i < 300; i++) { const keep = alpha; alpha = 1; step(); alpha = keep; }
+
+  function fitView() {
+    const xs = nodes.map((n) => n.x), ys = nodes.map((n) => n.y);
+    const minx = Math.min(...xs), maxx = Math.max(...xs);
+    const miny = Math.min(...ys), maxy = Math.max(...ys);
+    const w = wrap.clientWidth, h = wrap.clientHeight;
+    const k = Math.min(w / (maxx - minx + 160), h / (maxy - miny + 160), 1.6);
+    view.k = k;
+    view.tx = w / 2 - (k * (minx + maxx)) / 2;
+    view.ty = h / 2 - (k * (miny + maxy)) / 2;
+  }
+
+  function resize() {
+    const dpr = devicePixelRatio || 1;
+    canvas.width = wrap.clientWidth * dpr;
+    canvas.height = wrap.clientHeight * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    fitView();
+    draw();
+  }
+
+  function draw() {
+    ctx.save();
+    ctx.clearRect(0, 0, wrap.clientWidth, wrap.clientHeight);
+    ctx.translate(view.tx, view.ty);
+    ctx.scale(view.k, view.k);
+
+    const focus = hover >= 0 ? hover : selected;
+    // Edges
+    for (const e of edges) {
+      const a = nodes[e.a], b = nodes[e.b];
+      const hot = focus >= 0 && (e.a === focus || e.b === focus);
+      ctx.strokeStyle = hot ? css("--accent") : css("--edge");
+      ctx.lineWidth = (0.6 + Math.log2(1 + e.w) * 0.5) / view.k * (hot ? 1.6 : 1);
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      const mx = (a.x + b.x) / 2 - (b.y - a.y) * 0.08;
+      const my = (a.y + b.y) / 2 + (b.x - a.x) * 0.08;
+      ctx.quadraticCurveTo(mx, my, b.x, b.y);
+      ctx.stroke();
+      if (hot) {
+        // Direction dot near the target end.
+        const t = 0.85;
+        const px = (1 - t) * (1 - t) * a.x + 2 * (1 - t) * t * mx + t * t * b.x;
+        const py = (1 - t) * (1 - t) * a.y + 2 * (1 - t) * t * my + t * t * b.y;
+        ctx.fillStyle = css("--accent");
+        ctx.beginPath(); ctx.arc(px, py, 2.4 / view.k, 0, 7); ctx.fill();
+      }
+    }
+    // Cross-language seam edges — dashed, in the seam accent, drawn over the
+    // code edges so the frontend↔backend wires stand out.
+    ctx.setLineDash([6 / view.k, 4 / view.k]);
+    for (const e of seamEdges) {
+      const a = nodes[e.a], b = nodes[e.b];
+      const hot = focus >= 0 && (e.a === focus || e.b === focus);
+      ctx.strokeStyle = css("--seam");
+      ctx.globalAlpha = hot ? 1 : 0.75;
+      ctx.lineWidth = (1.1 + Math.log2(1 + e.w) * 0.6) / view.k;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      const mx = (a.x + b.x) / 2 - (b.y - a.y) * 0.12;
+      const my = (a.y + b.y) / 2 + (b.x - a.x) * 0.12;
+      ctx.quadraticCurveTo(mx, my, b.x, b.y);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    ctx.setLineDash([]);
+    // Nodes
+    for (const n of nodes) {
+      const m = D.modules[n.i];
+      const dim = focus >= 0 && focus !== n.i && !edges.some((e) => (e.a === focus && e.b === n.i) || (e.b === focus && e.a === n.i));
+      ctx.globalAlpha = dim ? 0.28 : 1;
+      ctx.fillStyle = nodeColor(m);
+      ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, 7); ctx.fill();
+      // 2px surface ring separates overlapping marks.
+      ctx.lineWidth = 2 / view.k;
+      ctx.strokeStyle = css("--surface");
+      ctx.stroke();
+      if (inCycle.has(n.i)) {
+        ctx.lineWidth = 1.4 / view.k;
+        ctx.strokeStyle = css("--warning");
+        ctx.beginPath(); ctx.arc(n.x, n.y, n.r + 3 / view.k, 0, 7); ctx.stroke();
+      }
+      if (D.modules[n.i].spof) {
+        ctx.lineWidth = 1.6 / view.k;
+        ctx.strokeStyle = css("--critical");
+        ctx.setLineDash([3 / view.k, 3 / view.k]);
+        ctx.beginPath(); ctx.arc(n.x, n.y, n.r + (inCycle.has(n.i) ? 6 : 3) / view.k, 0, 7); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      if (n.i === selected) {
+        ctx.lineWidth = 1.6 / view.k;
+        ctx.strokeStyle = css("--accent");
+        ctx.beginPath(); ctx.arc(n.x, n.y, n.r + 8 / view.k, 0, 7); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+    // Labels for large or focused nodes
+    ctx.fillStyle = css("--ink-2");
+    ctx.font = `${11 / view.k}px ui-monospace, monospace`;
+    for (const n of nodes) {
+      if (n.r > 11 || n.i === focus || n.i === selected) {
+        const name = D.modules[n.i].path.split("/").pop();
+        ctx.fillText(name, n.x + n.r + 3 / view.k, n.y + 3 / view.k);
+      }
+    }
+    ctx.restore();
+  }
+
+  function tick() {
+    if (alpha > 0.02) { step(); draw(); }
+    requestAnimationFrame(tick);
+  }
+
+  // Interaction
+  function pick(mx, my) {
+    const x = (mx - view.tx) / view.k, y = (my - view.ty) / view.k;
+    let best = -1, bd = 1e9;
+    for (const n of nodes) {
+      const d = Math.hypot(n.x - x, n.y - y);
+      if (d < n.r + 6 / view.k && d < bd) { bd = d; best = n.i; }
+    }
+    return best;
+  }
+  let drag = null;
+  canvas.addEventListener("pointerdown", (e) => {
+    const hit = pick(e.offsetX, e.offsetY);
+    drag = { x: e.offsetX, y: e.offsetY, node: hit, moved: false };
+    canvas.classList.add("dragging");
+    canvas.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (drag) {
+      const dx = e.offsetX - drag.x, dy = e.offsetY - drag.y;
+      if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+      if (drag.node >= 0) {
+        const n = nodes[drag.node];
+        n.x += dx / view.k; n.y += dy / view.k;
+      } else {
+        view.tx += dx; view.ty += dy;
+      }
+      drag.x = e.offsetX; drag.y = e.offsetY;
+      draw();
+      return;
+    }
+    const h = pick(e.offsetX, e.offsetY);
+    if (h !== hover) { hover = h; draw(); }
+    if (h >= 0) {
+      const m = D.modules[h];
+      const deg = edges.filter((x) => x.a === h || x.b === h).length;
+      tooltip.style.display = "block";
+      tooltip.style.left = e.offsetX + 14 + "px";
+      tooltip.style.top = e.offsetY + 10 + "px";
+      tooltip.innerHTML = `<div class="path">${esc(m.path)}</div>
+        <div class="meta">${m.lang} · ${m.lines} lines · ${m.symbols} symbols · ${deg} deps${inCycle.has(h) ? " · in cycle" : ""}</div>`;
+    } else tooltip.style.display = "none";
+  });
+  canvas.addEventListener("pointerup", (e) => {
+    canvas.classList.remove("dragging");
+    if (drag && !drag.moved && drag.node >= 0) selectModule(drag.node);
+    else if (drag && !drag.moved && drag.node < 0) { selected = -1; panel.classList.remove("open"); draw(); }
+    drag = null;
+  });
+  canvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const f = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+    const nx = e.offsetX, ny = e.offsetY;
+    view.tx = nx - (nx - view.tx) * f;
+    view.ty = ny - (ny - view.ty) * f;
+    view.k *= f;
+    draw();
+  }, { passive: false });
+
+  function selectModule(i) {
+    selected = i;
+    const m = D.modules[i];
+    const outs = edges.filter((e) => e.a === i).sort((x, y) => y.w - x.w);
+    const ins = edges.filter((e) => e.b === i).sort((x, y) => y.w - x.w);
+    const syms = D.symbols.map((s, j) => [s, j]).filter(([s]) => s.module === i)
+      .sort((x, y) => (y[0].ins + y[0].outs) - (x[0].ins + x[0].outs));
+    panel.innerHTML = `
+      <button class="close" type="button" aria-label="Close">✕</button>
+      <h3>${esc(m.path)}</h3>
+      <div class="meta">${m.lang} · ${m.lines} lines · ${m.symbols} symbols${inCycle.has(i) ? ' · <span style="color:var(--warning)">part of a dependency cycle</span>' : ""}</div>
+      <h4>Depends on (${outs.length})</h4>
+      <ul>${outs.slice(0, 20).map((e) => `<li><a data-mod="${e.b}">${esc(D.modules[e.b].path)}</a> <span class="sub">×${e.w}</span></li>`).join("") || '<li class="sub">nothing</li>'}</ul>
+      <h4>Depended on by (${ins.length})</h4>
+      <ul>${ins.slice(0, 20).map((e) => `<li><a data-mod="${e.a}">${esc(D.modules[e.a].path)}</a> <span class="sub">×${e.w}</span></li>`).join("") || '<li class="sub">nothing</li>'}</ul>
+      <h4>Symbols (${syms.length})</h4>
+      <ul>${syms.slice(0, 30).map(([s, j]) => `<li>${symLabel(j)} <span class="sub">${s.ins}↓ ${s.outs}↑</span></li>`).join("") || '<li class="sub">none</li>'}</ul>`;
+    panel.classList.add("open");
+    draw();
+  }
+  panel.addEventListener("click", (e) => {
+    if (e.target.closest(".close")) { selected = -1; panel.classList.remove("open"); draw(); return; }
+    const mod = e.target.closest("[data-mod]");
+    if (mod) { selectModule(+mod.dataset.mod); return; }
+    const sym = e.target.closest("[data-sym]");
+    if (sym) { panel.innerHTML = `<button class="close" type="button" aria-label="Close">✕</button>` + symbolDetailHTML(+sym.dataset.sym); }
+  });
+
+  // Layered layout: pin x by topological layer, keep y free-floating.
+  function applyLayered() {
+    const byLayer = new Map();
+    for (const n of nodes) {
+      const L = D.modules[n.i].layer;
+      if (!byLayer.has(L)) byLayer.set(L, []);
+      byLayer.get(L).push(n);
+    }
+    const gap = 150;
+    for (const [L, ns] of byLayer) {
+      ns.sort((a, b) => a.i - b.i);
+      ns.forEach((n, k) => { n.x = L * gap - (D.analytics.module_depth * gap) / 2; n.y = (k - ns.length / 2) * 46; n.vx = 0; n.vy = 0; });
+    }
+    alpha = 0; fitView(); draw();
+  }
+  function applyForce() { alpha = reduceMotion ? 0 : 0.6; }
+
+  document.getElementById("size-mode").addEventListener("change", (e) => { modeState.size = e.target.value; draw(); });
+  document.getElementById("color-mode").addEventListener("change", (e) => { modeState.color = e.target.value; refreshLegend(); draw(); });
+  document.getElementById("layout-mode").addEventListener("change", (e) => {
+    modeState.layout = e.target.value;
+    if (modeState.layout === "layered") applyLayered(); else { applyForce(); }
+  });
+  {
+    const seamCount = seamEdges.reduce((s, e) => s + e.w, 0);
+    document.getElementById("graph-note").innerHTML =
+      "dashed red ring = single point of failure · yellow = in cycle" +
+      (seamCount
+        ? ` · <span style="color:var(--seam);font-weight:600">━ ━</span> cross-language seam (${seamCount} HTTP link${seamCount === 1 ? "" : "s"})`
+        : "");
+  }
+
+  addEventListener("resize", resize);
+  resize();
+  if (!reduceMotion) tick();
+
+  // ------- Impact closure (transitive callers + callees of a symbol) -------
+  function closure(start, adjMap) {
+    const seen = new Set([start]); const q = [start];
+    while (q.length) { const u = q.pop(); for (const v of (adjMap.get(u) || [])) if (!seen.has(v)) { seen.add(v); q.push(v); } }
+    seen.delete(start); return seen;
+  }
+  function impactHTML(i) {
+    const upstream = closure(i, callersOf);   // everything that (transitively) reaches i
+    const downstream = closure(i, calleesOf); // everything i (transitively) reaches
+    return `<div class="impact">Changing this affects <b>${upstream.size}</b> upstream ${upstream.size === 1 ? "caller" : "callers"} · reaches <b>${downstream.size}</b> downstream ${downstream.size === 1 ? "symbol" : "symbols"}</div>`;
+  }
+
+  // ------- Architecture view -------
+  let archRendered = false;
+  function renderArchitecture() {
+    if (archRendered) return;
+    archRendered = true;
+    const A = D.analytics;
+    const tile = (label, value, sub, cls) =>
+      `<div class="tile"><div class="label">${label}</div><div class="value ${cls || ""}">${value}${sub ? `<small> ${sub}</small>` : ""}</div></div>`;
+    const cellClass = (v, warn, bad) => (v >= bad ? "bad" : v >= warn ? "warn" : "ok");
+
+    // Reachability and layering are derived from the *resolved* call graph. When
+    // call resolution is low (typical for Rust, where trait/dynamic dispatch is
+    // hard to resolve statically), "unreachable" and "up-call" counts are
+    // dominated by resolution gaps, not real dead code / real violations — so we
+    // present them as lower bounds and drop the alarm colour rather than screaming
+    // red at a number that's mostly an artefact.
+    const res = D.meta.resolved_calls / (D.meta.calls || 1);
+    const lowRes = res < 0.5;
+    const resPct = Math.round(res * 100);
+    const reachSub = lowRes ? `≤ upper bound · ${resPct}% calls resolved` : "no entry path";
+    const layerSub = lowRes ? `≤ upper bound · ${resPct}% calls resolved` : "up-calls";
+    const reachCls = lowRes ? "" : cellClass(A.unreachable_symbols, 1, 100);
+    const layerCls = lowRes ? "" : cellClass(A.layering_violations, 1, 20);
+
+    // Central symbols
+    const central = D.symbols.map((s, i) => [s, i]).sort((a, b) => b[0].rank - a[0].rank).slice(0, 12);
+    // Depended-on modules
+    const mods = D.modules.map((m, i) => [m, i]).filter(([m]) => m.ca + m.ce > 0)
+      .sort((a, b) => b[0].ca - a[0].ca || a[0].instability - b[0].instability);
+    const spof = D.modules.filter((m) => m.spof).sort((a, b) => b.ca - a.ca);
+    const unstable = D.modules.filter((m) => m.ca + m.ce >= 3).sort((a, b) => b.instability - a.instability).slice(0, 8);
+
+    document.getElementById("arch-body").innerHTML = `
+      ${lowRes ? `<div class="sub" style="padding:8px 12px;border:1px solid var(--grid);border-radius:8px;background:color-mix(in oklab,var(--warning) 8%,transparent)">
+        Only <b>${resPct}%</b> of calls resolved statically — reachability and layering below are <b>upper bounds</b>, not confirmed dead code or violations. Most of the gap is unresolved trait/dynamic dispatch, not real problems.
+      </div>` : ""}
+      <div class="tiles">
+        ${tile("Call-graph depth", A.call_depth, "hops")}
+        ${tile("Module depth", A.module_depth, "layers")}
+        ${tile("Communities", A.communities, "clusters")}
+        ${tile("Layering violations", A.layering_violations, layerSub, layerCls)}
+        ${tile("Single points of failure", A.spof_modules, "modules", cellClass(A.spof_modules, 1, 5))}
+        ${tile("Unreachable symbols", A.unreachable_symbols, reachSub, reachCls)}
+        ${tile("Dependency cycles", D.cycles.length, "SCCs", cellClass(D.cycles.length, 1, 3))}
+        ${tile("Resolved calls", Math.round(100 * D.meta.resolved_calls / (D.meta.calls || 1)) + "%", D.meta.resolved_calls.toLocaleString() + " edges")}
+      </div>
+      <div class="panelgrid">
+        <div class="card">
+          <h4 style="margin-top:0">Instability vs. coupling <span class="sub">(Martin metrics)</span></h4>
+          <canvas class="scatter" id="instab-scatter"></canvas>
+          <div class="sub" style="margin-top:6px">x = instability I=Ce/(Ca+Ce) · y = afferent coupling Ca · dot size = PageRank · red ring = SPOF</div>
+        </div>
+        <div class="card">
+          <h4 style="margin-top:0">Most central symbols <span class="sub">(PageRank)</span></h4>
+          <div class="tablewrap" style="max-height:230px;border:none">
+            <table><tbody>${central.map(([s, i]) =>
+              `<tr data-sym="${i}"><td class="num" style="width:52px">${s.rank.toFixed(3)}</td><td class="mono">${esc(s.fq)}</td></tr>`).join("")}</tbody></table>
+          </div>
+        </div>
+        <div class="card">
+          <h4 style="margin-top:0">Most depended-on modules</h4>
+          <div class="tablewrap" style="max-height:230px;border:none">
+            <table><thead><tr><th class="num">Ca</th><th class="num">Ce</th><th class="num">I</th><th>Module</th></tr></thead>
+            <tbody>${mods.slice(0, 12).map(([m]) =>
+              `<tr><td class="num">${m.ca}</td><td class="num">${m.ce}</td><td class="num">${m.instability.toFixed(2)}</td><td class="mono">${esc(m.path)}${m.spof ? ' <span class="badge sink">SPOF</span>' : ""}</td></tr>`).join("")}</tbody></table>
+          </div>
+        </div>
+        <div class="card">
+          <h4 style="margin-top:0">Refactor pressure <span class="sub">(depended-on AND unstable)</span></h4>
+          ${unstable.length ? `<ul style="list-style:none">${unstable.map((m) =>
+            `<li style="padding:3px 0"><span class="mono">${esc(m.path)}</span> <span class="sub">Ca=${m.ca} I=${m.instability.toFixed(2)}</span></li>`).join("")}</ul>`
+            : '<div class="sub">None — depended-on modules are stable.</div>'}
+        </div>
+      </div>`;
+
+    // Wire symbol links in the central table
+    document.getElementById("arch-body").addEventListener("click", (e) => {
+      const tr = e.target.closest("tr[data-sym]"); if (!tr) return;
+      tabs.querySelector('[data-view="symbols"]').click();
+      const j = +tr.dataset.sym;
+      document.getElementById("sym-panel").innerHTML = symbolDetailHTML(j);
+      document.getElementById("sym-panel").classList.add("open");
+    });
+
+    drawScatter(mods.map(([m]) => m).concat(spof));
+  }
+
+  function drawScatter(mods) {
+    const cv = document.getElementById("instab-scatter");
+    if (!cv) return;
+    const dpr = devicePixelRatio || 1;
+    cv.width = cv.clientWidth * dpr; cv.height = 230 * dpr;
+    const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const W = cv.clientWidth, H = 230, pad = 30;
+    const maxCa = Math.max(1, ...D.modules.map((m) => m.ca));
+    const X = (i) => pad + i * (W - 2 * pad);
+    const Y = (ca) => H - pad - (ca / maxCa) * (H - 2 * pad);
+    // axes
+    g.strokeStyle = css("--grid"); g.lineWidth = 1;
+    g.beginPath(); g.moveTo(pad, pad); g.lineTo(pad, H - pad); g.lineTo(W - pad, H - pad); g.stroke();
+    // "main sequence" guide (I + A ≈ 1 proxy: diagonal from stable-core to unstable-leaf)
+    g.strokeStyle = css("--baseline"); g.setLineDash([4, 4]);
+    g.beginPath(); g.moveTo(X(0), Y(maxCa)); g.lineTo(X(1), Y(0)); g.stroke(); g.setLineDash([]);
+    for (const m of D.modules) {
+      if (m.ca + m.ce === 0) continue;
+      const r = 3 + 10 * Math.sqrt(m.rank);
+      g.fillStyle = css(SLOTS[m.community % SLOTS.length]);
+      g.globalAlpha = 0.85;
+      g.beginPath(); g.arc(X(m.instability), Y(m.ca), r, 0, 7); g.fill();
+      g.globalAlpha = 1;
+      if (m.spof) { g.strokeStyle = css("--critical"); g.lineWidth = 1.4; g.beginPath(); g.arc(X(m.instability), Y(m.ca), r + 2, 0, 7); g.stroke(); }
+    }
+    g.fillStyle = css("--muted"); g.font = "10px system-ui";
+    g.fillText("stable", pad, H - pad + 12); g.fillText("unstable", W - pad - 40, H - pad + 12);
+  }
+
+  // ------- Performance view (optimisation-profile lens) -------
+  const PROFILES = {
+    "Lowest latency": ["latency"],
+    "Fastest throughput": ["throughput"],
+    "Lowest memory": ["memory"],
+    "Lowest CPU": ["cpu"],
+    "Real-time": ["latency", "determinism"],
+    "Everything": ["latency", "throughput", "memory", "cpu", "determinism"],
+  };
+  let perfProfile = "Lowest latency";
+  let perfWired = false;
+  function renderPerformance() {
+    const chips = document.getElementById("obj-chips");
+    if (!perfWired) {
+      perfWired = true;
+      chips.innerHTML = Object.keys(PROFILES).map((p) =>
+        `<button type="button" data-prof="${p}" class="${p === perfProfile ? "active" : ""}">${p}</button>`).join(" ");
+      chips.addEventListener("click", (e) => {
+        const b = e.target.closest("button"); if (!b) return;
+        perfProfile = b.dataset.prof;
+        chips.querySelectorAll("button").forEach((x) => x.classList.toggle("active", x === b));
+        paintPerf();
+      });
+      document.getElementById("perf-body").addEventListener("click", (e) => {
+        const a = e.target.closest("[data-sym]");
+        if (a) { tabs.querySelector('[data-view="symbols"]').click();
+          document.getElementById("sym-panel").innerHTML = symbolDetailHTML(+a.dataset.sym);
+          document.getElementById("sym-panel").classList.add("open"); }
+      });
+    }
+    paintPerf();
+  }
+  // Map a perf signal's file:line back to a symbol index for drill-through.
+  const symByLoc = new Map();
+  D.symbols.forEach((s, i) => symByLoc.set(D.modules[s.module].path + ":" + s.line, i));
+
+  function paintPerf() {
+    const objs = PROFILES[perfProfile];
+    const OBJC = { latency: "--critical", throughput: "--s1", memory: "--s7", cpu: "--s2", determinism: "--warning" };
+    const scored = D.perf.map((s) => {
+      let hit = 0, help = 0;
+      const tags = [];
+      for (const [o, w] of s.impacts) {
+        if (!objs.includes(o)) continue;
+        if (w > 0) { hit += w; tags.push([o, w]); } else { help += -w; tags.push([o, w]); }
+      }
+      return { s, hit, help, tags };
+    });
+    const hurts = scored.filter((x) => x.hit > 0).sort((a, b) => b.hit - a.hit);
+    const helps = scored.filter((x) => x.hit === 0 && x.help > 0);
+    const body = document.getElementById("perf-body");
+    document.getElementById("perf-note").innerHTML =
+      `Objectives: <b>${objs.join(", ")}</b> · ${hurts.length} construct${hurts.length === 1 ? "" : "s"} working against this goal`;
+
+    const tagHTML = (tags) => tags.map(([o, w]) =>
+      `<span class="mw" style="border-color:var(${OBJC[o] || "--ring"});color:var(${OBJC[o] || "--ink-2"})">${w > 0 ? "hurts" : "helps"} ${o} ${Math.abs(w)}</span>`).join(" ");
+    const card = (x, isHelp) => {
+      const s = x.s;
+      const bar = Math.min(100, (isHelp ? x.help : x.hit) * 18);
+      const col = isHelp ? "--good" : "--critical";
+      const symIdx = symByLoc.get(s.file + ":" + s.line);
+      return `<div class="card" style="border-left:3px solid var(${col})">
+        <div class="head"><b>${esc(s.kind)}</b>
+          <span class="sub">${esc(s.message)}</span>
+          <span class="sub" style="margin-left:auto"><span class="mono">${esc(s.file)}:${s.line}</span>${symIdx != null ? ` · <a data-sym="${symIdx}" style="color:var(--accent);cursor:pointer">enclosing fn</a>` : ""}</span></div>
+        <div class="pillrow" style="margin:6px 0">${tagHTML(x.tags)}</div>
+        <div class="meter" style="height:4px;border-radius:2px;background:var(--grid);margin:2px 0 6px"><i style="display:block;height:100%;width:${bar}%;background:var(${col});border-radius:2px"></i></div>
+        <div class="sub" style="color:var(--ink-2)">${esc(s.fix)}</div>
+      </div>`;
+    };
+
+    let html = "";
+    if (!hurts.length) html += `<div class="empty">Nothing detected working against ${esc(perfProfile.toLowerCase())}.</div>`;
+    else html += hurts.map((x) => card(x, false)).join("");
+    if (helps.length) {
+      html += `<h4 style="color:var(--muted);text-transform:uppercase;font-size:11px;letter-spacing:.05em;margin:8px 0 0">Trade-offs that aid this goal at another's expense</h4>`;
+      html += helps.map((x) => card(x, true)).join("");
+    }
+    body.innerHTML = html;
+  }
+
+  // ------- Symbols view -------
+  const symRows = document.getElementById("sym-rows");
+  const symPanel = document.getElementById("sym-panel");
+  const order = D.symbols.map((_, i) => i)
+    .sort((a, b) => (D.symbols[b].ins + D.symbols[b].outs) - (D.symbols[a].ins + D.symbols[a].outs));
+  function renderSymbols(q) {
+    const ql = (q || "").toLowerCase();
+    const rows = order.filter((i) => {
+      const s = D.symbols[i];
+      return !ql || (s.fq + " " + s.kind + " " + D.modules[s.module].path).toLowerCase().includes(ql);
+    });
+    symRows.innerHTML = rows.slice(0, 500).map((i) => {
+      const s = D.symbols[i];
+      return `<tr data-sym="${i}">
+        <td class="mono">${esc(s.name)}</td><td>${esc(s.kind)}</td>
+        <td class="mono">${esc(D.modules[s.module].path)}:${s.line}</td>
+        <td class="num">${s.ins}</td><td class="num">${s.outs}</td>
+        <td>${s.entry ? '<span class="badge entry">entry</span>' : ""}${s.sink ? `<span class="badge sink">${esc(s.sink)}</span>` : ""}</td>
+      </tr>`;
+    }).join("");
+    document.getElementById("sym-count").textContent =
+      `${rows.length} of ${D.symbols.length}${rows.length > 500 ? " (showing 500)" : ""}`;
+  }
+  renderSymbols("");
+  document.getElementById("sym-search").addEventListener("input", (e) => renderSymbols(e.target.value));
+  symRows.addEventListener("click", (e) => {
+    const tr = e.target.closest("tr[data-sym]"); if (!tr) return;
+    symPanel.innerHTML = symbolDetailHTML(+tr.dataset.sym);
+    symPanel.classList.add("open");
+  });
+  symPanel.addEventListener("click", (e) => {
+    const sym = e.target.closest("[data-sym]");
+    if (sym) symPanel.innerHTML = symbolDetailHTML(+sym.dataset.sym);
+  });
+
+  // ------- Flows view -------
+  const flowCards = document.getElementById("flow-cards");
+  const flows = [...D.taints, ...D.chains];
+  flowCards.innerHTML = flows.length ? flows.map((f) => `
+    <div class="card">
+      <div class="head"><span class="sev ${esc(f.severity)}">${esc(f.severity.toUpperCase())}</span>
+        <span class="sub">${f.kind === "taint" ? "taint flow" : "call chain"}</span></div>
+      <div class="msg">${esc(f.message)}</div>
+      ${f.hops.length ? `<div class="hops">${f.hops.map((h) => `<div class="hop">${esc(h.desc)} <span class="loc">${esc(h.file)}${h.line ? ":" + h.line : ""}</span></div>`).join("")}</div>` : ""}
+    </div>`).join("") : '<div class="empty">No source→sink flows discovered.</div>';
+
+  // ------- Cycles view -------
+  const cycleCards = document.getElementById("cycle-cards");
+  cycleCards.innerHTML = D.cycles.length ? D.cycles.map((scc) => `
+    <div class="card">
+      <div class="head"><span class="sev Medium">CYCLE</span><span class="sub">${scc.length} modules</span></div>
+      <div class="pillrow" style="margin-top:6px">${scc.map((i) => `<span class="mw">${esc(D.modules[i].path)}</span>`).join("")}</div>
+    </div>`).join("") : '<div class="empty">No module-level dependency cycles — the dependency graph is a DAG.</div>';
+
+  // ------- Routes view -------
+  document.getElementById("route-rows").innerHTML = D.routes.length ? D.routes.map((r) => `
+    <tr>
+      <td><b>${esc(r.method)}</b></td><td class="mono">${esc(r.path)}</td>
+      <td>${r.middleware.map((m) => `<span class="mw">${esc(m)}</span>`).join(" ") || '<span class="sub">none</span>'}</td>
+      <td class="mono">${esc(r.file)}:${r.line}</td>
+      <td>${r.resolved ? '<span class="badge entry">resolved</span>' : '<span class="sub">unresolved</span>'}</td>
+    </tr>`).join("") : '<tr><td colspan="5" class="empty">No routes discovered (not a Laravel project, or no route files).</td></tr>';
+})();
+</script>
+</body>
+</html>

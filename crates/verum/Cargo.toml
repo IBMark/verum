@@ -1,0 +1,26 @@
+[package]
+name = "verum"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "verum"
+path = "src/main.rs"
+
+[dependencies]
+verum-nucleus = { path = "../verum-nucleus" }
+verum-mappa = { path = "../verum-mappa" }
+verum-lumen = { path = "../verum-lumen" }
+verum-faber = { path = "../verum-faber" }
+verum-arbiter = { path = "../verum-arbiter" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+indicatif = { workspace = true }
+console = { workspace = true }
+colored = { workspace = true }
+walkdir = { workspace = true }

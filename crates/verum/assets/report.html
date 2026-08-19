@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Axiom Report</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7; --surface: #fcfcfb;
+    --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --baseline: #c3c2b7;
+    --ring: rgba(11,11,11,0.10);
+    --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+    --info: #898781;
+    --accent: #2a78d6;
+    --good-text: #006300;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface: #1a1a19;
+      --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --baseline: #383835;
+      --ring: rgba(255,255,255,0.10);
+      --accent: #3987e5;
+      --good-text: #0ca30c;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19;
+    --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --baseline: #383835;
+    --ring: rgba(255,255,255,0.10);
+    --accent: #3987e5;
+    --good-text: #0ca30c;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--page); color: var(--ink);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 24px; max-width: 1200px; margin: 0 auto;
+  }
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+  h1 { font-size: 20px; font-weight: 700; }
+  .sub { color: var(--ink-2); font-size: 13px; }
+  .sub code { font-family: ui-monospace, monospace; font-size: 12px; }
+  #theme-toggle {
+    margin-left: auto; border: 1px solid var(--ring); background: var(--surface);
+    color: var(--ink-2); border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; font-size: 12px;
+  }
+  section { margin-top: 20px; }
+  h2 { font-size: 13px; font-weight: 600; color: var(--ink-2); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 10px; }
+
+  .gate { border-radius: 8px; padding: 10px 14px; font-weight: 600; display: flex; gap: 10px; align-items: center; border: 1px solid var(--ring); background: var(--surface); }
+  .gate .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .gate ul { font-weight: 400; color: var(--ink-2); margin-left: auto; list-style: none; text-align: right; }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+  .tile { background: var(--surface); border: 1px solid var(--ring); border-radius: 8px; padding: 12px 14px; }
+  .tile .label { color: var(--muted); font-size: 12px; }
+  .tile .value { font-size: 26px; font-weight: 700; margin-top: 2px; }
+  .tile .value small { font-size: 13px; font-weight: 400; color: var(--muted); }
+  .tile.hero .value { font-size: 34px; }
+  .tile .meter { height: 4px; border-radius: 2px; background: var(--grid); margin-top: 8px; overflow: hidden; }
+  .tile .meter i { display: block; height: 100%; border-radius: 2px; }
+
+  .sevbar { display: flex; height: 18px; border-radius: 4px; overflow: hidden; gap: 2px; background: transparent; }
+  .sevbar i { display: block; height: 100%; min-width: 3px; }
+  .sevlegend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px; color: var(--ink-2); font-size: 13px; }
+  .sevlegend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: baseline; }
+
+  .stats { color: var(--ink-2); font-size: 13px; display: flex; gap: 18px; flex-wrap: wrap; margin-top: 8px; }
+  .stats b { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; align-items: center; }
+  .filters button {
+    border: 1px solid var(--ring); background: var(--surface); color: var(--ink-2);
+    border-radius: 999px; padding: 3px 12px; cursor: pointer; font: inherit; font-size: 12px;
+  }
+  .filters button.active { border-color: var(--accent); color: var(--ink); font-weight: 600; }
+  .filters select, .filters input {
+    border: 1px solid var(--ring); background: var(--surface); color: var(--ink);
+    border-radius: 6px; padding: 4px 8px; font: inherit; font-size: 12px;
+  }
+  .filters input { flex: 1; min-width: 160px; }
+
+  .tablewrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--ring); border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 12px; border-top: 1px solid var(--grid); vertical-align: top; }
+  thead th { border-top: none; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; font-weight: 600; cursor: pointer; user-select: none; white-space: nowrap; }
+  tbody tr.main { cursor: pointer; }
+  tbody tr.main:hover { background: color-mix(in oklab, var(--accent) 6%, transparent); }
+  td.num { font-variant-numeric: tabular-nums; }
+  .pill { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .pill .sw { width: 8px; height: 8px; border-radius: 50%; }
+  td.file { font-family: ui-monospace, monospace; font-size: 12px; color: var(--ink-2); word-break: break-all; }
+  tr.detail td { background: color-mix(in oklab, var(--ink) 3%, transparent); color: var(--ink-2); font-size: 12.5px; }
+  tr.detail .sugg { color: var(--ink); }
+  .count-note { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .method { font-family: ui-monospace, monospace; font-size: 11px; font-weight: 700; letter-spacing: .04em; color: var(--accent); }
+  #seams-section h3 { font-size: 14px; margin: 18px 0 2px; }
+  .empty { color: var(--muted); padding: 18px; text-align: center; }
+  footer { margin-top: 28px; color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Axiom Report</h1>
+  <span class="sub" id="meta-line"></span>
+  <button id="theme-toggle" type="button">Theme</button>
+</header>
+<div class="sub" id="root-line"></div>
+
+<section id="gate-section"></section>
+
+<section>
+  <h2>Scores</h2>
+  <div class="tiles" id="score-tiles"></div>
+</section>
+
+<section>
+  <h2>Findings by severity</h2>
+  <div class="sevbar" id="sevbar"></div>
+  <div class="sevlegend" id="sevlegend"></div>
+  <div class="stats" id="triage-line"></div>
+</section>
+
+<section>
+  <h2>Findings</h2>
+  <div class="filters" id="filters">
+    <span id="sev-buttons"></span>
+    <select id="cat-select"><option value="">All categories</option></select>
+    <input id="search" type="search" placeholder="Filter by message, file, kind…">
+  </div>
+  <div class="tablewrap">
+    <table>
+      <thead><tr>
+        <th data-sort="sev">Severity</th>
+        <th data-sort="kind">Kind</th>
+        <th data-sort="msg">Finding</th>
+        <th data-sort="file">Location</th>
+        <th data-sort="conf">Conf.</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+  <div class="count-note" id="row-count"></div>
+</section>
+
+<section id="seams-section" hidden>
+  <h2>Cross-language seams</h2>
+  <p id="seams-summary" class="muted"></p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Method</th><th>Path</th><th>Client call</th><th>→</th><th>Backend route</th><th>Lang</th></tr></thead>
+      <tbody id="seam-rows"></tbody>
+    </table>
+  </div>
+  <div id="orphans-wrap"></div>
+</section>
+
+<section id="dups-section" hidden>
+  <h2>Duplicate groups</h2>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Similarity</th><th>Canonical</th><th>Duplicates</th><th>Call sites</th><th>Conf.</th></tr></thead>
+      <tbody id="dup-rows"></tbody>
+    </table>
+  </div>
+</section>
+
+<footer id="foot"></footer>
+
+<script id="axiom-data" type="application/json">__AXIOM_DATA__</script>
+<script>
+(function () {
+  "use strict";
+  const data = JSON.parse(document.getElementById("axiom-data").textContent);
+
+  // Theme toggle: stamp data-theme so it wins over the OS preference.
+  const toggle = document.getElementById("theme-toggle");
+  toggle.addEventListener("click", () => {
+    const root = document.documentElement;
+    const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+    const cur = root.dataset.theme || (dark ? "dark" : "light");
+    root.dataset.theme = cur === "dark" ? "light" : "dark";
+  });
+
+  const SEV = ["Critical", "High", "Medium", "Low", "Info"];
+  const SEV_COLOR = {
+    Critical: "var(--critical)", High: "var(--serious)", Medium: "var(--warning)",
+    Low: "var(--info)", Info: "var(--grid)",
+  };
+  const SEV_ICON = { Critical: "✗", High: "✗", Medium: "⚠", Low: "·", Info: "·" };
+  const CATEGORY = (kind) => {
+    if (/^Dead|Unreachable/.test(kind)) return "Dead code";
+    if (/Duplicate$/.test(kind)) return "Duplicates";
+    if (/^(SqlInjection|XssVulnerability|WeakCrypto|HardcodedSecret|EvalUsage|MissingAuth|MissingRole|PotentialIdor|WeakRandom|OpenRedirect)/.test(kind)) return "Security";
+    if (/^(GodClass|CircularDependency|HighComplexity|LongFunction|TooManyParams|DeepNesting)$/.test(kind)) return "Complexity";
+    if (/^(NPlusOne|StringConcat|ObjectInstantiation|MissingHook)/.test(kind)) return "Performance";
+    if (/^(UnsafeUsage|PanicRisk|BlockingInAsync|UnboundedChannel|HotPathAllocation|LockOnHotPath)$/.test(kind)) return "Performance";
+    if (/^(Naming|Convention)/.test(kind)) return "Naming";
+    if (/^(Open|Unencrypted|Public|Iam|Running|Privileged|MissingResource|MissingHealth|Unpinned|NoNetwork|SecretInEnv|HardcodedCredential)/.test(kind)) return "Infrastructure";
+    if (/Violation$/.test(kind)) return "Compliance";
+    if (kind === "DangerousChain") return "Chains";
+    return "Other";
+  };
+
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const rel = (p) => {
+    if (!p) return "";
+    const root = data.root.endsWith("/") ? data.root : data.root + "/";
+    return p.startsWith(root) ? p.slice(root.length) : p;
+  };
+
+  // Header
+  document.getElementById("meta-line").textContent =
+    `${data.meta.files} files · ${data.meta.lines.toLocaleString()} lines · ${data.meta.symbols.toLocaleString()} symbols`;
+  document.getElementById("root-line").innerHTML =
+    `<code>${esc(data.root)}</code> — generated ${new Date(data.generated_epoch * 1000).toLocaleString()}`;
+  document.getElementById("foot").textContent =
+    `Axiom ${data.version} · ${data.meta.calls.toLocaleString()} calls mapped · ${data.meta.routes} routes · ${data.meta.entry_points} entry points · build ${data.meta.build_ms} ms`;
+
+  // Gate banner
+  const gate = document.getElementById("gate-section");
+  const gcolor = data.gate.passed ? "var(--good)" : "var(--critical)";
+  gate.innerHTML = `<div class="gate"><span class="dot" style="background:${gcolor}"></span>
+    Deploy gate: ${data.gate.passed ? "PASSED" : "FAILED"}
+    ${data.gate.reasons.length ? `<ul>${data.gate.reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}</div>`;
+
+  // Score tiles
+  const scoreColor = (v) => (v >= 85 ? "var(--good)" : v >= 50 ? "var(--warning)" : "var(--critical)");
+  const dims = [
+    ["Overall", data.score.overall, true],
+    ["Security", data.score.security], ["Architecture", data.score.architecture],
+    ["Performance", data.score.performance], ["Naming", data.score.naming],
+    ["Complexity", data.score.complexity], ["Infrastructure", data.score.infrastructure],
+  ];
+  document.getElementById("score-tiles").innerHTML = dims.map(([label, v, hero]) => `
+    <div class="tile${hero ? " hero" : ""}">
+      <div class="label">${label}</div>
+      <div class="value">${v}<small>/100</small></div>
+      <div class="meter"><i style="width:${v}%;background:${scoreColor(v)}"></i></div>
+    </div>`).join("");
+
+  // Severity distribution
+  const counts = Object.fromEntries(SEV.map((s) => [s, 0]));
+  for (const f of data.findings) counts[f.severity] = (counts[f.severity] || 0) + 1;
+  const total = data.findings.length || 1;
+  document.getElementById("sevbar").innerHTML = SEV.filter((s) => counts[s] > 0)
+    .map((s) => `<i style="flex:${counts[s]} 0 auto;background:${SEV_COLOR[s]}" title="${s}: ${counts[s]}"></i>`)
+    .join("") || `<i style="flex:1;background:var(--grid)"></i>`;
+  document.getElementById("sevlegend").innerHTML = SEV
+    .map((s) => `<span><span class="sw" style="background:${SEV_COLOR[s]}"></span>${s} <b>${counts[s]}</b></span>`)
+    .join("");
+  document.getElementById("triage-line").innerHTML =
+    `<span>Total <b>${data.findings.length}</b></span>
+     <span>Auto-fixable <b>${data.triage.auto_fixable}</b></span>
+     <span>Needs AI review <b>${data.triage.claude_review}</b></span>
+     <span>Needs human review <b>${data.triage.human_review}</b></span>`;
+
+  // Findings table with filters
+  const state = { sev: "", cat: "", q: "", sort: "sev", dir: -1 };
+  const sevRank = (s) => SEV.length - SEV.indexOf(s);
+  const rowsEl = document.getElementById("rows");
+  const findings = data.findings.map((f, i) => ({ ...f, _i: i, _cat: CATEGORY(f.kind), _rel: rel(f.file) }));
+
+  const cats = [...new Set(findings.map((f) => f._cat))].sort();
+  const catSel = document.getElementById("cat-select");
+  for (const c of cats) catSel.insertAdjacentHTML("beforeend", `<option>${esc(c)}</option>`);
+
+  const sevBtns = document.getElementById("sev-buttons");
+  sevBtns.innerHTML = ["", ...SEV].map((s) =>
+    `<button type="button" data-sev="${s}" class="${s === "" ? "active" : ""}">${s || "All"}</button>`).join(" ");
+
+  function render() {
+    let rows = findings.filter((f) =>
+      (!state.sev || f.severity === state.sev) &&
+      (!state.cat || f._cat === state.cat) &&
+      (!state.q || (f.message + " " + f._rel + " " + f.kind).toLowerCase().includes(state.q)));
+    const key = {
+      sev: (f) => sevRank(f.severity), kind: (f) => f.kind, msg: (f) => f.message,
+      file: (f) => f._rel + ":" + String(f.line_start).padStart(6, "0"), conf: (f) => f.confidence,
+    }[state.sort];
+    rows.sort((a, b) => {
+      const ka = key(a), kb = key(b);
+      return (ka < kb ? -1 : ka > kb ? 1 : sevRank(b.severity) - sevRank(a.severity)) * state.dir;
+    });
+    rowsEl.innerHTML = rows.length ? rows.map((f) => `
+      <tr class="main" data-i="${f._i}">
+        <td><span class="pill" style="color:${SEV_COLOR[f.severity]}"><span class="sw" style="background:${SEV_COLOR[f.severity]}"></span>${SEV_ICON[f.severity]} ${f.severity}</span></td>
+        <td>${esc(f.kind)}</td>
+        <td>${esc(f.message)}</td>
+        <td class="file">${esc(f._rel)}${f.line_start ? ":" + f.line_start : ""}</td>
+        <td class="num">${Math.round(f.confidence * 100)}%</td>
+      </tr>`).join("") : `<tr><td colspan="5" class="empty">No findings match the current filters.</td></tr>`;
+    document.getElementById("row-count").textContent =
+      `${rows.length} of ${findings.length} findings shown`;
+  }
+
+  rowsEl.addEventListener("click", (e) => {
+    const tr = e.target.closest("tr.main");
+    if (!tr) return;
+    const next = tr.nextElementSibling;
+    if (next && next.classList.contains("detail")) { next.remove(); return; }
+    const f = findings[+tr.dataset.i];
+    const related = (f.related || []).map((r) =>
+      `<div>↳ ${esc(rel(r.file))}${r.line ? ":" + r.line : ""} — ${esc(r.description)}</div>`).join("");
+    tr.insertAdjacentHTML("afterend",
+      `<tr class="detail"><td colspan="5"><div class="sugg">Suggestion: ${esc(f.suggestion)}</div>${related}
+       <div>id: <code>${esc(f.id)}</code>${f.auto_fixable ? " · auto-fixable" : ""}</div></td></tr>`);
+  });
+
+  sevBtns.addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    state.sev = b.dataset.sev;
+    sevBtns.querySelectorAll("button").forEach((x) => x.classList.toggle("active", x === b));
+    render();
+  });
+  catSel.addEventListener("change", () => { state.cat = catSel.value; render(); });
+  document.getElementById("search").addEventListener("input", (e) => {
+    state.q = e.target.value.toLowerCase(); render();
+  });
+  document.querySelectorAll("thead th").forEach((th) => th.addEventListener("click", () => {
+    const s = th.dataset.sort;
+    if (state.sort === s) state.dir *= -1; else { state.sort = s; state.dir = s === "sev" || s === "conf" ? -1 : 1; }
+    render();
+  }));
+
+  render();
+
+  // Cross-language seams
+  const ep = data.endpoints || { seams: [], orphan_calls: [], orphan_routes: [] };
+  if (ep.seams.length || ep.orphan_calls.length || ep.orphan_routes.length) {
+    document.getElementById("seams-section").hidden = false;
+    document.getElementById("seams-summary").textContent =
+      `${ep.seams.length} client→backend call${ep.seams.length === 1 ? "" : "s"} linked · ` +
+      `${ep.orphan_calls.length} call${ep.orphan_calls.length === 1 ? "" : "s"} to no route · ` +
+      `${ep.orphan_routes.length} unreached route${ep.orphan_routes.length === 1 ? "" : "s"}`;
+    document.getElementById("seam-rows").innerHTML = ep.seams.map((s) => `
+      <tr>
+        <td><span class="method">${esc(s.method)}</span></td>
+        <td class="file">${esc(s.path)}</td>
+        <td class="file">${esc(s.client_file)}:${s.client_line}</td>
+        <td class="num">→</td>
+        <td class="file">${esc(s.server_file)}:${s.server_line}${s.controller && s.controller !== "—" ? `<br><span class="muted">${esc(s.controller)}</span>` : ""}</td>
+        <td>${esc(s.server_lang)}</td>
+      </tr>`).join("");
+
+    const orphanTable = (title, rows, note) => rows.length ? `
+      <h3>${title} <span class="muted">(${rows.length})</span></h3>
+      <p class="muted">${note}</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Method</th><th>Path</th><th>Location</th></tr></thead>
+        <tbody>${rows.map((o) => `<tr><td><span class="method">${esc(o.method)}</span></td><td class="file">${esc(o.path)}</td><td class="file">${esc(o.file)}:${o.line}</td></tr>`).join("")}</tbody>
+      </table></div>` : "";
+    document.getElementById("orphans-wrap").innerHTML =
+      orphanTable("Client calls to no known route", ep.orphan_calls,
+        "Frontend calls a path no backend route serves — a typo, a removed endpoint, or an external/proxied URL.") +
+      orphanTable("Routes no client reaches", ep.orphan_routes,
+        "Backend routes no mapped client call hits — dead endpoints, or reached by an unmapped/external client.");
+  }
+
+  // Duplicate groups
+  if (data.duplicate_groups.length) {
+    document.getElementById("dups-section").hidden = false;
+    document.getElementById("dup-rows").innerHTML = data.duplicate_groups.map((g) => `
+      <tr>
+        <td>${esc(g.similarity)}</td>
+        <td class="file">${esc(g.canonical_name)}</td>
+        <td class="file">${g.duplicate_names.map(esc).join("<br>")}</td>
+        <td class="num">${g.call_sites}</td>
+        <td class="num">${Math.round(g.confidence * 100)}%</td>
+      </tr>`).join("");
+  }
+})();
+</script>
+</body>
+</html>
