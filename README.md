@@ -3,6 +3,8 @@
 [![CI](https://github.com/IBMark/verum/actions/workflows/ci.yml/badge.svg)](https://github.com/IBMark/verum/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/verum.svg)](https://crates.io/crates/verum)
 [![docs.rs](https://img.shields.io/docsrs/verum)](https://docs.rs/verum)
+[![Marketplace](https://img.shields.io/badge/Marketplace-Verum%20Code%20Analyzer-2088FF?logo=githubactions&logoColor=white)](https://github.com/marketplace/actions/verum-code-analyzer)
+[![Glama](https://glama.ai/mcp/servers/IBMark/verum/badges/score.svg)](https://glama.ai/mcp/servers/IBMark/verum)
 
 Verum is a deterministic, whole-program code analyzer. It maps a codebase into
 a single intermediate representation - symbols, call graph, routes, data flows -
@@ -97,9 +99,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo install --git https://github.com/IBMark/verum verum
-      - run: verum gate .
+      - uses: IBMark/verum-action@v1   # runs `verum gate .` by default
 ```
 
 On an existing codebase, snapshot the current findings once with
