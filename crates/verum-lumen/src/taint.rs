@@ -10,12 +10,13 @@
 //! passing tainted data into a sink-bearing function is reported as a
 //! cross-function flow at reduced confidence, with a structured [`TaintPath`].
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 use regex::Regex;
 
+use crate::scan::ScanContext;
 use verum_nucleus::{
     Finding, FindingKind, Ir, Language, Severity, SymbolId, SymbolKind, TaintHop, TaintPath,
     TaintSink, TaintSource,
@@ -190,16 +191,16 @@ struct SpanIndex<'a> {
 }
 
 impl<'a> SpanIndex<'a> {
-    fn build(ir: &'a Ir, file: &PathBuf) -> Self {
-        let mut spans: Vec<(SymbolId, u32, u32, &'a str)> = ir
-            .symbols
+    fn build(ir: &'a Ir, ctx: &ScanContext, file: &Path) -> Self {
+        let mut spans: Vec<(SymbolId, u32, u32, &'a str)> = ctx
+            .symbols(file)
             .iter()
+            .filter_map(|id| ir.symbols.get_key_value(id))
             .filter(|(_, s)| {
-                &s.file == file
-                    && matches!(
-                        s.kind,
-                        SymbolKind::Function | SymbolKind::Method | SymbolKind::StaticMethod
-                    )
+                matches!(
+                    s.kind,
+                    SymbolKind::Function | SymbolKind::Method | SymbolKind::StaticMethod
+                )
             })
             .map(|(id, s)| (*id, s.line_start, s.line_end, s.name.as_str()))
             .collect();
@@ -223,6 +224,14 @@ pub fn analyse(ir: &Ir) -> Vec<Finding> {
 
 /// Full analysis: findings plus structured taint paths (used by `verum map`).
 pub fn analyse_with_paths(ir: &Ir) -> (Vec<Finding>, Vec<TaintPath>) {
+    analyse_with_context(ir, &ScanContext::index_only(ir))
+}
+
+/// As [`analyse_with_paths`], but taking each file's lines and symbols from a
+/// context shared with the other line-scanning passes. Purely a performance
+/// split: the context reproduces what this pass used to derive per file, so the
+/// findings are identical either way.
+pub fn analyse_with_context(ir: &Ir, ctx: &ScanContext) -> (Vec<Finding>, Vec<TaintPath>) {
     // Group 2 captures a compound-assignment operator (`.=`, `+=`) when
     // present; empty means plain `=`. `[^=]` still rejects `==`.
     let assign_re =
@@ -243,8 +252,10 @@ pub fn analyse_with_paths(ir: &Ir) -> (Vec<Finding>, Vec<TaintPath>) {
         .collect();
     files.sort_by(|a, b| a.0.cmp(&b.0));
 
-    // Read each file once; the fixpoint below rescans from memory.
-    let mut contents: Vec<(PathBuf, ScanLang, Vec<String>)> = Vec::new();
+    // Per-file scan inputs, gathered once: lines and the function-span index.
+    // The fixpoint below rescans from these rather than re-reading the file or
+    // rebuilding the span index on every round.
+    let mut contents: Vec<(PathBuf, ScanLang, Cow<'_, [String]>, SpanIndex<'_>)> = Vec::new();
     for (path, language) in &files {
         let path_str = path.to_string_lossy();
         if path_str.contains("vendor/")
@@ -259,31 +270,31 @@ pub fn analyse_with_paths(ir: &Ir) -> (Vec<Finding>, Vec<TaintPath>) {
         if *language == Language::Rust && is_rust_non_runtime_path(path) {
             continue;
         }
-        let Ok(raw) = std::fs::read(path) else {
+        let Some(lines) = ctx.lines(path) else {
             continue;
         };
-        let lines: Vec<String> = raw.lines().map(|l| l.unwrap_or_default()).collect();
         let lang = match language {
             Language::Php => ScanLang::Php,
             Language::Rust => ScanLang::Rust,
             _ => ScanLang::Js,
         };
-        contents.push((path.clone(), lang, lines));
+        contents.push((path.clone(), lang, lines, SpanIndex::build(ir, ctx, path)));
     }
 
     // Fixpoint over tainted-return function names.
     let mut tainted_return_fns: HashSet<String> = HashSet::new();
-    let mut scans: Vec<(PathBuf, FileScan)> = Vec::new();
+    // One entry per `contents` entry, in the same order; the two are zipped
+    // below rather than each carrying its own copy of the path.
+    let mut scans: Vec<FileScan> = Vec::new();
     for round in 0..3 {
         scans.clear();
         let mut next_tainted: HashSet<String> = HashSet::new();
-        for (path, lang, lines) in &contents {
-            let spans = SpanIndex::build(ir, path);
+        for (path, lang, lines, spans) in &contents {
             let scan = scan_file(
                 path,
                 *lang,
                 lines,
-                &spans,
+                spans,
                 &tainted_return_fns,
                 &assign_re,
                 &call_re,
@@ -295,7 +306,7 @@ pub fn analyse_with_paths(ir: &Ir) -> (Vec<Finding>, Vec<TaintPath>) {
                     }
                 }
             }
-            scans.push((path.clone(), scan));
+            scans.push(scan);
         }
         let stable = next_tainted.is_subset(&tainted_return_fns);
         tainted_return_fns = next_tainted;
@@ -309,7 +320,7 @@ pub fn analyse_with_paths(ir: &Ir) -> (Vec<Finding>, Vec<TaintPath>) {
     {
         let mut ordered: Vec<(&SymbolId, &FnFact)> = scans
             .iter()
-            .flat_map(|(_, s)| s.facts.iter().map(|(id, f)| (id, f)))
+            .flat_map(|s| s.facts.iter().map(|(id, f)| (id, f)))
             .collect();
         ordered.sort_by_key(|(id, _)| id.0);
         for (id, fact) in ordered {
@@ -328,8 +339,7 @@ pub fn analyse_with_paths(ir: &Ir) -> (Vec<Finding>, Vec<TaintPath>) {
     let mut paths = Vec::new();
 
     // Direct (intra-procedural) detections.
-    for (path, scan) in &scans {
-        let spans = SpanIndex::build(ir, path);
+    for ((path, _, _, spans), scan) in contents.iter().zip(&scans) {
         for d in &scan.detections {
             findings.push(Finding {
                 id: format!(
@@ -376,7 +386,7 @@ pub fn analyse_with_paths(ir: &Ir) -> (Vec<Finding>, Vec<TaintPath>) {
         }
     }
     let mut seen_cross: HashSet<(PathBuf, u32, String)> = HashSet::new();
-    for (_, scan) in &scans {
+    for scan in &scans {
         for call in &scan.tainted_arg_calls {
             let Some((callee_id, sinks)) = sink_fns.get(&call.callee) else {
                 continue;

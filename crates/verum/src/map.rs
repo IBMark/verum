@@ -301,7 +301,11 @@ pub fn build_map_data(ir: &Ir, root: &Path) -> MapData {
         })
         .collect();
 
-    let (_, taint_paths) = verum_lumen::taint::analyse_with_paths(ir);
+    // `taint` and `rust_insights` below are both line scanners over the same
+    // tree; give them one shared read/symbol index instead of two.
+    let scan_ctx = verum_lumen::scan::ScanContext::build(ir);
+
+    let (_, taint_paths) = verum_lumen::taint::analyse_with_context(ir, &scan_ctx);
     let taints: Vec<MapFlow> = taint_paths
         .iter()
         .map(|p| {
@@ -333,7 +337,7 @@ pub fn build_map_data(ir: &Ir, root: &Path) -> MapData {
         })
         .collect();
 
-    let perf: Vec<PerfSignal> = verum_lumen::rust_insights::analyse(ir)
+    let perf: Vec<PerfSignal> = verum_lumen::rust_insights::analyse_with_context(ir, &scan_ctx)
         .iter()
         .map(|f| {
             let impacts = verum_lumen::rust_insights::impacts_for(&f.kind)

@@ -9,9 +9,9 @@
 //! Findings are informational and excluded from the security/architecture
 //! score. Each `suggestion` states the objective impact and the fix.
 
-use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
+use crate::scan::ScanContext;
 use verum_nucleus::{
     Direction, Finding, FindingKind, Ir, Language, Objective, PerfImpact, Severity, SymbolId,
     SymbolKind,
@@ -197,6 +197,14 @@ fn is_infallible_unwrap(code: &str) -> bool {
 }
 
 pub fn analyse(ir: &Ir) -> Vec<Finding> {
+    analyse_with_context(ir, &ScanContext::index_only(ir))
+}
+
+/// As [`analyse`], but taking each file's lines and symbols from a context
+/// shared with the other line-scanning passes. Purely a performance split: the
+/// context reproduces what this pass used to derive per file, so the findings
+/// are identical either way.
+pub fn analyse_with_context(ir: &Ir, ctx: &ScanContext) -> Vec<Finding> {
     let mut findings = Vec::new();
 
     let mut files: Vec<PathBuf> = ir
@@ -221,20 +229,19 @@ pub fn analyse(ir: &Ir) -> Vec<Finding> {
                 .is_some_and(|n| n.to_string_lossy().starts_with("test")))
             && !path_str.contains("fixtures");
 
-        let Ok(raw) = std::fs::read(path) else {
+        let Some(lines) = ctx.lines(path) else {
             continue;
         };
-        let lines: Vec<String> = raw.lines().map(|l| l.unwrap_or_default()).collect();
 
-        let mut spans: Vec<FnSpan> = ir
-            .symbols
-            .values()
+        let mut spans: Vec<FnSpan> = ctx
+            .symbols(path)
+            .iter()
+            .filter_map(|id| ir.symbols.get(id))
             .filter(|s| {
-                &s.file == path
-                    && matches!(
-                        s.kind,
-                        SymbolKind::Function | SymbolKind::Method | SymbolKind::StaticMethod
-                    )
+                matches!(
+                    s.kind,
+                    SymbolKind::Function | SymbolKind::Method | SymbolKind::StaticMethod
+                )
             })
             .map(|s| {
                 // Check the declaration line for `async`.
