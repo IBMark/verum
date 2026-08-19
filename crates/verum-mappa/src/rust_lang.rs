@@ -14,7 +14,7 @@ pub fn parse_file(path: &Path) -> Result<Ir> {
 
     let mut parser = tree_sitter::Parser::new();
     parser
-        .set_language(&tree_sitter_rust::language())
+        .set_language(&tree_sitter_rust::LANGUAGE.into())
         .map_err(|e| anyhow::anyhow!("Failed to set Rust language: {}", e))?;
 
     let tree = parser
@@ -263,7 +263,7 @@ impl RustExtractor {
             _ => {
                 let child_count = node.child_count();
                 for i in 0..child_count {
-                    if let Some(child) = node.child(i) {
+                    if let Some(child) = node.child(i as u32) {
                         self.walk_node(child);
                     }
                 }
@@ -297,7 +297,7 @@ impl RustExtractor {
         if let Some(body) = node.child_by_field_name("body") {
             let child_count = body.child_count();
             for i in 0..child_count {
-                if let Some(child) = body.child(i) {
+                if let Some(child) = body.child(i as u32) {
                     self.walk_node(child);
                 }
             }
@@ -495,7 +495,7 @@ impl RustExtractor {
 
             let child_count = body.child_count();
             for i in 0..child_count {
-                if let Some(child) = body.child(i) {
+                if let Some(child) = body.child(i as u32) {
                     self.walk_node(child);
                 }
             }
@@ -538,7 +538,7 @@ impl RustExtractor {
         if let Some(body) = node.child_by_field_name("body") {
             let child_count = body.child_count();
             for i in 0..child_count {
-                if let Some(child) = body.child(i) {
+                if let Some(child) = body.child(i as u32) {
                     self.walk_node(child);
                 }
             }
@@ -678,7 +678,7 @@ impl RustExtractor {
         if let Some(body) = node.child_by_field_name("body") {
             let child_count = body.child_count();
             for i in 0..child_count {
-                if let Some(child) = body.child(i) {
+                if let Some(child) = body.child(i as u32) {
                     self.walk_node(child);
                 }
             }
@@ -781,7 +781,7 @@ impl RustExtractor {
         }
         let n = node.child_count();
         for i in 0..n {
-            if let Some(c) = node.child(i) {
+            if let Some(c) = node.child(i as u32) {
                 self.collect_fn_returns(c);
             }
         }
@@ -856,7 +856,7 @@ impl RustExtractor {
         // Still walk children so calls in the initializer are recorded.
         let child_count = node.child_count();
         for i in 0..child_count {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 self.walk_node(child);
             }
         }
@@ -1213,7 +1213,9 @@ impl RustExtractor {
         if let Some(args) = node.child_by_field_name("arguments") {
             let n = args.child_count();
             for i in 0..n {
-                let Some(arg) = args.child(i) else { continue };
+                let Some(arg) = args.child(i as u32) else {
+                    continue;
+                };
                 if matches!(arg.kind(), "identifier" | "scoped_identifier") {
                     self.ir.calls.push(Call {
                         caller: caller_id,
@@ -1228,7 +1230,7 @@ impl RustExtractor {
 
         let child_count = node.child_count();
         for i in 0..child_count {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 self.walk_node(child);
             }
         }
@@ -1247,7 +1249,9 @@ impl RustExtractor {
         if let Some(body) = node.child_by_field_name("body") {
             let n = body.child_count();
             for i in 0..n {
-                let Some(field) = body.child(i) else { continue };
+                let Some(field) = body.child(i as u32) else {
+                    continue;
+                };
                 // `{ poll }` shorthand, or `{ poll: poll::<T, S> }` explicit.
                 let value = match field.kind() {
                     "shorthand_field_initializer" => field.child(0),
@@ -1285,7 +1289,7 @@ impl RustExtractor {
         // Recurse for nested calls inside field values (`{ x: foo() }`).
         let child_count = node.child_count();
         for i in 0..child_count {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 self.walk_node(child);
             }
         }
@@ -1311,7 +1315,7 @@ impl RustExtractor {
 
         let child_count = node.child_count();
         for i in 0..child_count {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 match child.kind() {
                     // Arguments are an unparsed token stream, not expressions.
                     "token_tree" => self.scan_token_tree(child),
@@ -1340,7 +1344,7 @@ impl RustExtractor {
             .unwrap_or_else(|| self.get_or_create_file_scope());
 
         let children: Vec<tree_sitter::Node> = (0..node.child_count())
-            .filter_map(|i| node.child(i))
+            .filter_map(|i| node.child(i as u32))
             .collect();
 
         for (i, child) in children.iter().enumerate() {
@@ -1586,7 +1590,7 @@ fn extract_route_method(args: &str) -> Option<HttpMethod> {
 
 fn extract_visibility(node: tree_sitter::Node, source: &str) -> Visibility {
     for i in 0..node.child_count() {
-        if let Some(child) = node.child(i) {
+        if let Some(child) = node.child(i as u32) {
             if child.kind() == "visibility_modifier" {
                 let text = child.utf8_text(source.as_bytes()).unwrap_or("").trim();
                 return match text {
@@ -1606,7 +1610,7 @@ fn extract_visibility(node: tree_sitter::Node, source: &str) -> Visibility {
 fn has_self_param(node: tree_sitter::Node, _source: &str) -> bool {
     if let Some(params) = node.child_by_field_name("parameters") {
         for i in 0..params.child_count() {
-            if let Some(child) = params.child(i) {
+            if let Some(child) = params.child(i as u32) {
                 if child.kind() == "self_parameter" {
                     return true;
                 }
@@ -1621,7 +1625,7 @@ fn count_params(node: tree_sitter::Node) -> u8 {
     if let Some(params) = node.child_by_field_name("parameters") {
         let mut count: u8 = 0;
         for i in 0..params.child_count() {
-            if let Some(child) = params.child(i) {
+            if let Some(child) = params.child(i as u32) {
                 if child.kind() == "parameter" || child.kind() == "variadic_parameter" {
                     count = count.saturating_add(1);
                 }
@@ -1758,7 +1762,7 @@ fn structural_hash(body: tree_sitter::Node) -> (u64, usize) {
                 *count += 1;
                 let n = node.child_count();
                 for i in 0..n {
-                    if let Some(child) = node.child(i) {
+                    if let Some(child) = node.child(i as u32) {
                         walk(child, acc, count);
                     }
                 }

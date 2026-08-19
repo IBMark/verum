@@ -16,7 +16,7 @@ pub fn parse_file(path: &Path) -> Result<Ir> {
 
     let mut parser = tree_sitter::Parser::new();
     parser
-        .set_language(&tree_sitter_go::language())
+        .set_language(&tree_sitter_go::LANGUAGE.into())
         .map_err(|e| anyhow::anyhow!("Failed to set Go language: {}", e))?;
 
     let tree = parser
@@ -121,11 +121,12 @@ impl GoExtractor {
             "function_declaration" => self.handle_function(node),
             "method_declaration" => self.handle_method(node),
             "call_expression" => self.handle_call(node),
+            "type_conversion_expression" => self.handle_type_conversion(node),
             "short_var_declaration" | "assignment_statement" => {
                 self.detect_group_assignment(node);
                 let child_count = node.child_count();
                 for i in 0..child_count {
-                    if let Some(child) = node.child(i) {
+                    if let Some(child) = node.child(i as u32) {
                         self.walk_node(child);
                     }
                 }
@@ -133,7 +134,7 @@ impl GoExtractor {
             _ => {
                 let child_count = node.child_count();
                 for i in 0..child_count {
-                    if let Some(child) = node.child(i) {
+                    if let Some(child) = node.child(i as u32) {
                         self.walk_node(child);
                     }
                 }
@@ -143,7 +144,7 @@ impl GoExtractor {
 
     fn handle_package(&mut self, node: tree_sitter::Node) {
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 if child.kind() == "package_identifier" {
                     self.current_package = self.node_text(child).to_string();
                 }
@@ -153,7 +154,7 @@ impl GoExtractor {
 
     fn handle_type_declaration(&mut self, node: tree_sitter::Node) {
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 if child.kind() == "type_spec" {
                     self.handle_type_spec(child);
                 }
@@ -211,7 +212,7 @@ impl GoExtractor {
         if let Some(type_body) = type_node {
             let child_count = type_body.child_count();
             for j in 0..child_count {
-                if let Some(child) = type_body.child(j) {
+                if let Some(child) = type_body.child(j as u32) {
                     self.walk_node(child);
                 }
             }
@@ -261,7 +262,7 @@ impl GoExtractor {
         if let Some(body) = node.child_by_field_name("body") {
             let child_count = body.child_count();
             for i in 0..child_count {
-                if let Some(child) = body.child(i) {
+                if let Some(child) = body.child(i as u32) {
                     self.walk_node(child);
                 }
             }
@@ -329,7 +330,7 @@ impl GoExtractor {
         if let Some(body) = node.child_by_field_name("body") {
             let child_count = body.child_count();
             for i in 0..child_count {
-                if let Some(child) = body.child(i) {
+                if let Some(child) = body.child(i as u32) {
                     self.walk_node(child);
                 }
             }
@@ -343,7 +344,7 @@ impl GoExtractor {
     fn extract_receiver_type(&self, node: tree_sitter::Node) -> Option<String> {
         let receiver = node.child_by_field_name("receiver")?;
         for i in 0..receiver.child_count() {
-            if let Some(child) = receiver.child(i) {
+            if let Some(child) = receiver.child(i as u32) {
                 if child.kind() == "parameter_declaration" {
                     if let Some(type_node) = child.child_by_field_name("type") {
                         return Some(self.extract_type_name(type_node));
@@ -359,7 +360,7 @@ impl GoExtractor {
         match node.kind() {
             "pointer_type" => {
                 for i in 0..node.child_count() {
-                    if let Some(child) = node.child(i) {
+                    if let Some(child) = node.child(i as u32) {
                         if child.kind() == "type_identifier" {
                             return self.node_text(child).to_string();
                         }
@@ -369,6 +370,35 @@ impl GoExtractor {
             }
             "type_identifier" => self.node_text(node).to_string(),
             _ => self.node_text(node).to_string(),
+        }
+    }
+
+    /// `Name[T](x)` in expression position is syntactically ambiguous in Go
+    /// and the grammar resolves it as a conversion to a generic type
+    /// (`type_conversion_expression(type: generic_type, operand: x)`), even
+    /// when semantically it is a call to a generic function - which is how
+    /// generic helpers like `GetState[T](key)` end up here rather than in
+    /// `call_expression`. Record a call edge to the instantiated name so such
+    /// callees are not reported dead; a genuine type conversion resolves to
+    /// no function symbol and the edge is harmless.
+    fn handle_type_conversion(&mut self, node: tree_sitter::Node) {
+        if let Some(ty) = node.child_by_field_name("type") {
+            if ty.kind() == "generic_type" {
+                if let (Some(name_node), Some(caller_id)) =
+                    (ty.child_by_field_name("type"), self.current_function)
+                {
+                    self.ir.calls.push(Call {
+                        caller: caller_id,
+                        callee: CallTarget::Unresolved(self.node_text(name_node).to_string()),
+                        file: self.path.clone(),
+                        line: node.start_position().row as u32 + 1,
+                        col: node.start_position().column as u32,
+                    });
+                }
+            }
+        }
+        if let Some(operand) = node.child_by_field_name("operand") {
+            self.walk_node(operand);
         }
     }
 
@@ -392,6 +422,41 @@ impl GoExtractor {
                 format!("{}.{}", operand, field)
             }
             "identifier" => self.node_text(function_node).to_string(),
+            "type_instantiation_expression" => {
+                // A generic instantiation call like GetState[T](s, key) or
+                // pkg.Value[T](x): the grammar wraps the callee in a
+                // type_instantiation_expression whose `type` field is the
+                // instantiated name. Unwrap it so the call edge carries
+                // GetState / pkg.Value instead of the raw "GetState[T]" text,
+                // which resolves to nothing and leaves the callee looking
+                // dead. (Plain value indexing, handlers[i](x), stays an
+                // index_expression and keeps the raw-text fallback below.)
+                match function_node.child_by_field_name("type") {
+                    Some(ty) => self.node_text(ty).to_string(),
+                    None => self.node_text(function_node).to_string(),
+                }
+            }
+            "index_expression" => {
+                // A *qualified* generic call, pkg.Fn[T](x), parses as
+                // call_expression(function: index_expression(operand:
+                // selector_expression, index: <type>)) - the same shape as
+                // indexing a slice of funcs, handlers[i](x). Unwrap to the
+                // operand only when the index reads as a type argument, so
+                // value indexing keeps the raw-text fallback.
+                let index_is_type_arg = function_node
+                    .child_by_field_name("index")
+                    .map(|ix| is_type_argument_text(self.node_text(ix)))
+                    .unwrap_or(false);
+                match function_node.child_by_field_name("operand") {
+                    Some(op)
+                        if index_is_type_arg
+                            && matches!(op.kind(), "identifier" | "selector_expression") =>
+                    {
+                        self.node_text(op).to_string()
+                    }
+                    _ => self.node_text(function_node).to_string(),
+                }
+            }
             "parenthesized_expression" => {
                 // Dynamic call via function variable
                 let text = self.node_text(function_node).to_string();
@@ -438,7 +503,7 @@ impl GoExtractor {
         let mut out = Vec::new();
         if let Some(args) = node.child_by_field_name("arguments") {
             for i in 0..args.child_count() {
-                if let Some(c) = args.child(i) {
+                if let Some(c) = args.child(i as u32) {
                     if c.is_named() {
                         out.push(c);
                     }
@@ -481,7 +546,7 @@ impl GoExtractor {
             // Second expression_list in an assignment.
             let mut lists = Vec::new();
             for i in 0..node.child_count() {
-                if let Some(c) = node.child(i) {
+                if let Some(c) = node.child(i as u32) {
                     if c.kind() == "expression_list" {
                         lists.push(c);
                     }
@@ -496,7 +561,7 @@ impl GoExtractor {
         // First identifier on the left-hand side.
         let mut lhs_name = None;
         for i in 0..left.child_count() {
-            if let Some(c) = left.child(i) {
+            if let Some(c) = left.child(i as u32) {
                 if c.kind() == "identifier" {
                     lhs_name = Some(self.node_text(c).to_string());
                     break;
@@ -508,7 +573,7 @@ impl GoExtractor {
         // First call_expression on the right-hand side.
         let mut call = None;
         for i in 0..right.child_count() {
-            if let Some(c) = right.child(i) {
+            if let Some(c) = right.child(i as u32) {
                 if c.kind() == "call_expression" {
                     call = Some(c);
                     break;
@@ -694,7 +759,7 @@ impl GoExtractor {
         if let Some(args) = node.child_by_field_name("arguments") {
             let child_count = args.child_count();
             for i in 0..child_count {
-                if let Some(child) = args.child(i) {
+                if let Some(child) = args.child(i as u32) {
                     self.walk_node(child);
                 }
             }
@@ -706,7 +771,7 @@ fn count_params(node: tree_sitter::Node) -> u8 {
     if let Some(params) = node.child_by_field_name("parameters") {
         let mut count: u8 = 0;
         for i in 0..params.child_count() {
-            if let Some(child) = params.child(i) {
+            if let Some(child) = params.child(i as u32) {
                 if child.kind() == "parameter_declaration" {
                     count = count.saturating_add(1);
                 }
@@ -721,7 +786,7 @@ fn count_params(node: tree_sitter::Node) -> u8 {
 /// First direct child of `node` with the given kind.
 fn child_of_kind<'a>(node: tree_sitter::Node<'a>, kind: &str) -> Option<tree_sitter::Node<'a>> {
     for i in 0..node.child_count() {
-        if let Some(c) = node.child(i) {
+        if let Some(c) = node.child(i as u32) {
             if c.kind() == kind {
                 return Some(c);
             }
@@ -892,4 +957,41 @@ fn hash_normalized(s: &str) -> u64 {
         i += 1;
     }
     hash_string(&normalized)
+}
+
+/// True when the text inside `f[...]` reads as a generic type argument
+/// (exported or type-parameter identifier, builtin type, qualified or
+/// composite type) rather than a value index like `i` or `n+1`. Used to
+/// separate qualified generic calls `pkg.Fn[T](x)` from slice-of-funcs
+/// indexing `handlers[i](x)`, which the grammar gives the same shape.
+fn is_type_argument_text(raw: &str) -> bool {
+    let t = raw.trim();
+    t.starts_with(|c: char| c.is_ascii_uppercase())
+        || t.contains('.')
+        || t.contains('[')
+        || t.starts_with('*')
+        || matches!(
+            t,
+            "any"
+                | "bool"
+                | "byte"
+                | "rune"
+                | "string"
+                | "error"
+                | "int"
+                | "int8"
+                | "int16"
+                | "int32"
+                | "int64"
+                | "uint"
+                | "uint8"
+                | "uint16"
+                | "uint32"
+                | "uint64"
+                | "uintptr"
+                | "float32"
+                | "float64"
+                | "complex64"
+                | "complex128"
+        )
 }

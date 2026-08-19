@@ -182,3 +182,76 @@ func call() {
         "resty client.R().Get should record an http_call for /api/z"
     );
 }
+
+#[test]
+fn generic_instantiation_call_unwraps_to_callee_name() {
+    let source = r#"
+package main
+
+func GetState[T any](key string) (T, bool) {
+	var zero T
+	return zero, false
+}
+
+func MustGetState[T any](key string) T {
+	dep, ok := GetState[T](key)
+	if !ok {
+		panic(key)
+	}
+	return dep
+}
+"#;
+    let ir = parse_go("generic_call", source);
+    let has_edge = ir.calls.iter().any(|c| match &c.callee {
+        verum_nucleus::CallTarget::Unresolved(name) => name == "GetState",
+        _ => false,
+    });
+    assert!(
+        has_edge,
+        "GetState[T](key) should record a call to GetState"
+    );
+}
+
+#[test]
+fn func_slice_index_call_is_not_a_named_callee() {
+    let source = r#"
+package main
+
+func run(handlers []func(), i int) {
+	handlers[i]()
+}
+"#;
+    let ir = parse_go("index_call", source);
+    let named_handlers = ir.calls.iter().any(|c| match &c.callee {
+        verum_nucleus::CallTarget::Unresolved(name) => name == "handlers",
+        _ => false,
+    });
+    assert!(
+        !named_handlers,
+        "handlers[i]() must not resolve to a function named handlers"
+    );
+}
+
+#[test]
+fn qualified_generic_instantiation_call_records_edge() {
+    let source = r#"
+package middleware
+
+func FromContext(ctx any) (string, bool) {
+	return fiber.ValueFromContext[string](ctx, requestIDKey)
+}
+"#;
+    let ir = parse_go("qualified_generic_call", source);
+    let names: Vec<String> = ir
+        .calls
+        .iter()
+        .filter_map(|c| match &c.callee {
+            verum_nucleus::CallTarget::Unresolved(name) => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        names.iter().any(|n| n == "fiber.ValueFromContext"),
+        "expected fiber.ValueFromContext edge, got: {names:?}"
+    );
+}

@@ -21,7 +21,7 @@ pub fn parse_file(path: &Path) -> Result<Ir> {
 
     let mut parser = tree_sitter::Parser::new();
     parser
-        .set_language(&tree_sitter_java::language())
+        .set_language(&tree_sitter_java::LANGUAGE.into())
         .map_err(|e| anyhow::anyhow!("Failed to set Java language: {}", e))?;
 
     let tree = parser
@@ -192,7 +192,7 @@ impl JavaExtractor {
 
     fn walk_children(&mut self, node: tree_sitter::Node) {
         for i in 0..node.child_count() {
-            if let Some(c) = node.child(i) {
+            if let Some(c) = node.child(i as u32) {
                 self.walk_node(c);
             }
         }
@@ -301,7 +301,7 @@ impl JavaExtractor {
     fn collect_type_names(&self, node: tree_sitter::Node) -> Vec<String> {
         let mut out = Vec::new();
         for i in 0..node.named_child_count() {
-            if let Some(child) = node.named_child(i) {
+            if let Some(child) = node.named_child(i as u32) {
                 match child.kind() {
                     "type_identifier" | "scoped_type_identifier" => {
                         out.push(self.node_text(child).to_string());
@@ -326,7 +326,7 @@ impl JavaExtractor {
         let doc_comment = self.annotations_text(modifiers);
         // A single `field_declaration` may declare several names: `int a, b;`.
         for i in 0..node.named_child_count() {
-            let child = match node.named_child(i) {
+            let child = match node.named_child(i as u32) {
                 Some(c) => c,
                 None => continue,
             };
@@ -482,7 +482,7 @@ impl JavaExtractor {
 
     fn modifiers_of<'a>(&self, node: tree_sitter::Node<'a>) -> Option<tree_sitter::Node<'a>> {
         for i in 0..node.child_count() {
-            if let Some(c) = node.child(i) {
+            if let Some(c) = node.child(i as u32) {
                 if c.kind() == "modifiers" {
                     return Some(c);
                 }
@@ -495,7 +495,7 @@ impl JavaExtractor {
     fn visibility_from(&self, modifiers: Option<tree_sitter::Node>) -> Visibility {
         if let Some(mods) = modifiers {
             for i in 0..mods.child_count() {
-                if let Some(c) = mods.child(i) {
+                if let Some(c) = mods.child(i as u32) {
                     match self.node_text(c) {
                         "public" => return Visibility::Public,
                         "protected" => return Visibility::Protected,
@@ -513,7 +513,7 @@ impl JavaExtractor {
         let mods = modifiers?;
         let mut parts = Vec::new();
         for i in 0..mods.child_count() {
-            if let Some(c) = mods.child(i) {
+            if let Some(c) = mods.child(i as u32) {
                 if c.kind() == "annotation" || c.kind() == "marker_annotation" {
                     parts.push(self.node_text(c).to_string());
                 }
@@ -533,7 +533,7 @@ impl JavaExtractor {
         };
         let mut count: u32 = 0;
         for i in 0..params.named_child_count() {
-            if let Some(c) = params.named_child(i) {
+            if let Some(c) = params.named_child(i as u32) {
                 if c.kind() == "formal_parameter" || c.kind() == "spread_parameter" {
                     count += 1;
                 }

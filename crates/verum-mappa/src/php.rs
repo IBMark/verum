@@ -14,7 +14,7 @@ pub fn parse_file(path: &Path) -> Result<Ir> {
 
     let mut parser = tree_sitter::Parser::new();
     parser
-        .set_language(&tree_sitter_php::language_php())
+        .set_language(&tree_sitter_php::LANGUAGE_PHP.into())
         .map_err(|e| anyhow::anyhow!("Failed to set PHP language: {}", e))?;
 
     let tree = parser
@@ -120,7 +120,7 @@ impl PhpExtractor {
             _ => {
                 let child_count = node.child_count();
                 for i in 0..child_count {
-                    if let Some(child) = node.child(i) {
+                    if let Some(child) = node.child(i as u32) {
                         self.walk_node(child);
                     }
                 }
@@ -162,14 +162,14 @@ impl PhpExtractor {
     /// Handle `use App\Models\User;` or `use App\Models\User as UserModel;`
     fn handle_use_declaration(&mut self, node: tree_sitter::Node) {
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 if child.kind() == "namespace_use_clause" {
                     let fq_name = child
                         .child_by_field_name("name")
                         .or_else(|| {
                             // Some grammars put the name as first child
                             for j in 0..child.child_count() {
-                                if let Some(grandchild) = child.child(j) {
+                                if let Some(grandchild) = child.child(j as u32) {
                                     if grandchild.kind() == "qualified_name"
                                         || grandchild.kind() == "namespace_name"
                                         || grandchild.kind() == "name"
@@ -256,7 +256,7 @@ impl PhpExtractor {
     fn handle_group_use(&mut self, group_node: tree_sitter::Node, parent_node: tree_sitter::Node) {
         let mut prefix = String::new();
         for i in 0..group_node.child_count() {
-            if let Some(child) = group_node.child(i) {
+            if let Some(child) = group_node.child(i as u32) {
                 if child.kind() == "namespace_name" || child.kind() == "qualified_name" {
                     prefix = self.node_text(child).to_string();
                     break;
@@ -265,7 +265,7 @@ impl PhpExtractor {
         }
 
         for i in 0..group_node.child_count() {
-            if let Some(child) = group_node.child(i) {
+            if let Some(child) = group_node.child(i as u32) {
                 if child.kind() == "namespace_use_clause" {
                     let name = child
                         .child_by_field_name("name")
@@ -273,7 +273,7 @@ impl PhpExtractor {
                         .unwrap_or_else(|| {
                             // Fallback: first identifier child
                             for j in 0..child.child_count() {
-                                if let Some(gc) = child.child(j) {
+                                if let Some(gc) = child.child(j as u32) {
                                     if gc.kind() == "name" || gc.kind() == "qualified_name" {
                                         return self.node_text(gc).to_string();
                                     }
@@ -358,7 +358,7 @@ impl PhpExtractor {
 
         let child_count = node.child_count();
         for i in 0..child_count {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 self.walk_node(child);
             }
         }
@@ -367,7 +367,7 @@ impl PhpExtractor {
     /// Handle `new User()`, `new ServerCreationService()`
     fn handle_object_creation(&mut self, node: tree_sitter::Node) {
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 if child.kind() == "name"
                     || child.kind() == "qualified_name"
                     || child.kind() == "namespace_name"
@@ -404,7 +404,7 @@ impl PhpExtractor {
         if let Some(args) = node.child_by_field_name("arguments") {
             let child_count = args.child_count();
             for i in 0..child_count {
-                if let Some(child) = args.child(i) {
+                if let Some(child) = args.child(i as u32) {
                     self.walk_node(child);
                 }
             }
@@ -419,7 +419,7 @@ impl PhpExtractor {
             .unwrap_or_else(|| self.get_or_create_file_scope());
 
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 match child.kind() {
                     "name" | "qualified_name" | "namespace_name" => {
                         let trait_name = self.node_text(child).to_string();
@@ -457,7 +457,7 @@ impl PhpExtractor {
         if let Some(body) = node.child_by_field_name("body") {
             let child_count = body.child_count();
             for i in 0..child_count {
-                if let Some(child) = body.child(i) {
+                if let Some(child) = body.child(i as u32) {
                     self.walk_node(child);
                 }
             }
@@ -465,7 +465,7 @@ impl PhpExtractor {
             // Namespace without braces - walk remaining siblings
             let child_count = node.child_count();
             for i in 0..child_count {
-                if let Some(child) = node.child(i) {
+                if let Some(child) = node.child(i as u32) {
                     if child.kind() != "namespace_name" && child.kind() != "namespace" {
                         self.walk_node(child);
                     }
@@ -515,7 +515,7 @@ impl PhpExtractor {
         if let Some(body) = node.child_by_field_name("body") {
             let child_count = body.child_count();
             for i in 0..child_count {
-                if let Some(child) = body.child(i) {
+                if let Some(child) = body.child(i as u32) {
                     self.walk_node(child);
                 }
             }
@@ -527,12 +527,12 @@ impl PhpExtractor {
     /// Extract parent class and implemented interfaces from class declaration.
     fn extract_class_heritage(&mut self, node: tree_sitter::Node, class_id: SymbolId) {
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 match child.kind() {
                     // `extends BaseClass`
                     "base_clause" => {
                         for j in 0..child.child_count() {
-                            if let Some(name_node) = child.child(j) {
+                            if let Some(name_node) = child.child(j as u32) {
                                 if name_node.kind() == "name"
                                     || name_node.kind() == "qualified_name"
                                     || name_node.kind() == "namespace_name"
@@ -563,7 +563,7 @@ impl PhpExtractor {
                     // `implements InterfaceA, InterfaceB`
                     "class_interface_clause" => {
                         for j in 0..child.child_count() {
-                            if let Some(name_node) = child.child(j) {
+                            if let Some(name_node) = child.child(j as u32) {
                                 if name_node.kind() == "name"
                                     || name_node.kind() == "qualified_name"
                                     || name_node.kind() == "namespace_name"
@@ -708,7 +708,7 @@ impl PhpExtractor {
         if let Some(body) = node.child_by_field_name("body") {
             let child_count = body.child_count();
             for i in 0..child_count {
-                if let Some(child) = body.child(i) {
+                if let Some(child) = body.child(i as u32) {
                     self.walk_node(child);
                 }
             }
@@ -777,7 +777,7 @@ impl PhpExtractor {
         if let Some(body) = node.child_by_field_name("body") {
             let child_count = body.child_count();
             for i in 0..child_count {
-                if let Some(child) = body.child(i) {
+                if let Some(child) = body.child(i as u32) {
                     self.walk_node(child);
                 }
             }
@@ -795,7 +795,7 @@ impl PhpExtractor {
         };
 
         for i in 0..params.child_count() {
-            if let Some(child) = params.child(i) {
+            if let Some(child) = params.child(i as u32) {
                 match child.kind() {
                     "simple_parameter" | "property_promotion_parameter" | "variadic_parameter" => {
                         self.extract_type_from_param(child, caller_id);
@@ -811,7 +811,7 @@ impl PhpExtractor {
             self.register_type_as_call(type_node, caller_id);
         } else {
             for i in 0..param_node.child_count() {
-                if let Some(child) = param_node.child(i) {
+                if let Some(child) = param_node.child(i as u32) {
                     match child.kind() {
                         "named_type" | "qualified_name" | "name" | "optional_type"
                         | "union_type" | "intersection_type" | "nullable_type" => {
@@ -829,14 +829,14 @@ impl PhpExtractor {
         match type_node.kind() {
             "union_type" | "intersection_type" => {
                 for i in 0..type_node.child_count() {
-                    if let Some(child) = type_node.child(i) {
+                    if let Some(child) = type_node.child(i as u32) {
                         self.register_type_as_call(child, caller_id);
                     }
                 }
             }
             "optional_type" | "nullable_type" => {
                 for i in 0..type_node.child_count() {
-                    if let Some(child) = type_node.child(i) {
+                    if let Some(child) = type_node.child(i as u32) {
                         if child.kind() != "?" {
                             self.register_type_as_call(child, caller_id);
                         }
@@ -910,7 +910,7 @@ impl PhpExtractor {
     fn arg_nodes<'a>(&self, args: tree_sitter::Node<'a>) -> Vec<tree_sitter::Node<'a>> {
         let mut out = Vec::new();
         for i in 0..args.child_count() {
-            if let Some(child) = args.child(i) {
+            if let Some(child) = args.child(i as u32) {
                 if child.kind() == "argument" {
                     out.push(child);
                 }
@@ -927,7 +927,7 @@ impl PhpExtractor {
             return None;
         }
         for j in 0..child.child_count() {
-            if let Some(sc) = child.child(j) {
+            if let Some(sc) = child.child(j as u32) {
                 if sc.kind() == "string_content" {
                     return Some(self.node_text(sc).to_string());
                 }
@@ -1065,7 +1065,7 @@ impl PhpExtractor {
         if let Some(args) = node.child_by_field_name("arguments") {
             let child_count = args.child_count();
             for i in 0..child_count {
-                if let Some(child) = args.child(i) {
+                if let Some(child) = args.child(i as u32) {
                     self.walk_node(child);
                 }
             }
@@ -1134,7 +1134,7 @@ impl PhpExtractor {
         if let Some(args) = node.child_by_field_name("arguments") {
             let child_count = args.child_count();
             for i in 0..child_count {
-                if let Some(child) = args.child(i) {
+                if let Some(child) = args.child(i as u32) {
                     self.walk_node(child);
                 }
             }
@@ -1192,7 +1192,7 @@ impl PhpExtractor {
         if let Some(args) = node.child_by_field_name("arguments") {
             let child_count = args.child_count();
             for i in 0..child_count {
-                if let Some(child) = args.child(i) {
+                if let Some(child) = args.child(i as u32) {
                     self.walk_node(child);
                 }
             }
@@ -1202,7 +1202,7 @@ impl PhpExtractor {
 
 fn extract_visibility(node: tree_sitter::Node, source: &str) -> Visibility {
     for i in 0..node.child_count() {
-        if let Some(child) = node.child(i) {
+        if let Some(child) = node.child(i as u32) {
             if child.kind() == "visibility_modifier" {
                 let text = child
                     .utf8_text(source.as_bytes())
@@ -1222,7 +1222,7 @@ fn extract_visibility(node: tree_sitter::Node, source: &str) -> Visibility {
 
 fn check_static(node: tree_sitter::Node, source: &str) -> bool {
     for i in 0..node.child_count() {
-        if let Some(child) = node.child(i) {
+        if let Some(child) = node.child(i as u32) {
             if child.kind() == "static_modifier" {
                 return true;
             }
@@ -1244,7 +1244,7 @@ fn count_params(node: tree_sitter::Node) -> u8 {
     if let Some(params) = node.child_by_field_name("parameters") {
         let mut count: u8 = 0;
         for i in 0..params.child_count() {
-            if let Some(child) = params.child(i) {
+            if let Some(child) = params.child(i as u32) {
                 if child.kind() == "simple_parameter"
                     || child.kind() == "variadic_parameter"
                     || child.kind() == "property_promotion_parameter"

@@ -35,12 +35,12 @@ pub fn parse_source(
         // Use TSX parser for .tsx files, regular TS for .ts
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         if ext == "tsx" {
-            tree_sitter_typescript::language_tsx()
+            tree_sitter_typescript::LANGUAGE_TSX.into()
         } else {
-            tree_sitter_typescript::language_typescript()
+            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
         }
     } else {
-        tree_sitter_javascript::language()
+        tree_sitter_javascript::LANGUAGE.into()
     };
 
     parser
@@ -164,7 +164,7 @@ impl JsExtractor {
     fn walk_children(&mut self, node: tree_sitter::Node) {
         let child_count = node.child_count();
         for i in 0..child_count {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 self.walk_node(child);
             }
         }
@@ -196,7 +196,7 @@ impl JsExtractor {
         let mut imported_names: Vec<String> = Vec::new();
 
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 match child.kind() {
                     // `import X from ...` - default import
                     "identifier" => {
@@ -249,7 +249,7 @@ impl JsExtractor {
 
     fn extract_import_clause_names(&self, node: tree_sitter::Node, names: &mut Vec<String>) {
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 match child.kind() {
                     "identifier" => {
                         let name = self.node_text(child).to_string();
@@ -260,7 +260,7 @@ impl JsExtractor {
                     "named_imports" => {
                         // `{ X, Y as Z }` - import_specifier children
                         for j in 0..child.child_count() {
-                            if let Some(spec) = child.child(j) {
+                            if let Some(spec) = child.child(j as u32) {
                                 if spec.kind() == "import_specifier" {
                                     // The "name" field is what's exported, "alias" is local name
                                     if let Some(name_node) = spec.child_by_field_name("name") {
@@ -282,7 +282,7 @@ impl JsExtractor {
                     "namespace_import" => {
                         // `* as Ns`
                         for j in 0..child.child_count() {
-                            if let Some(grandchild) = child.child(j) {
+                            if let Some(grandchild) = child.child(j as u32) {
                                 if grandchild.kind() == "identifier" {
                                     let name = self.node_text(grandchild).to_string();
                                     if !name.is_empty() && name != "as" {
@@ -307,12 +307,12 @@ impl JsExtractor {
             .unwrap_or_else(|| self.get_or_create_file_scope());
 
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 match child.kind() {
                     "export_clause" => {
                         // `export { X, Y } from ...`
                         for j in 0..child.child_count() {
-                            if let Some(spec) = child.child(j) {
+                            if let Some(spec) = child.child(j as u32) {
                                 if spec.kind() == "export_specifier" {
                                     if let Some(name_node) = spec.child_by_field_name("name") {
                                         let name = self.node_text(name_node).to_string();
@@ -341,7 +341,7 @@ impl JsExtractor {
 
     fn has_child_kind(&self, node: tree_sitter::Node, kind: &str) -> bool {
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 if child.kind() == kind {
                     return true;
                 }
@@ -560,7 +560,7 @@ impl JsExtractor {
     fn handle_variable_declaration(&mut self, node: tree_sitter::Node) {
         let child_count = node.child_count();
         for i in 0..child_count {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 if child.kind() == "variable_declarator" {
                     self.handle_variable_declarator(child);
                 }
@@ -874,7 +874,7 @@ impl JsExtractor {
     /// Content (quotes stripped) of the first string-literal argument.
     fn first_string_arg(&self, args: tree_sitter::Node) -> Option<String> {
         for i in 0..args.child_count() {
-            let c = args.child(i)?;
+            let c = args.child(i as u32)?;
             if matches!(c.kind(), "string" | "template_string") {
                 return Some(strip_quotes(self.node_text(c)));
             }
@@ -904,12 +904,14 @@ impl JsExtractor {
     /// URL from a config object argument (`{ url: '/y', method: 'post' }`).
     fn url_from_config_object(&self, args: tree_sitter::Node) -> Option<String> {
         for i in 0..args.child_count() {
-            let c = args.child(i)?;
+            let c = args.child(i as u32)?;
             if c.kind() != "object" {
                 continue;
             }
             for j in 0..c.child_count() {
-                let Some(pair) = c.child(j) else { continue };
+                let Some(pair) = c.child(j as u32) else {
+                    continue;
+                };
                 if pair.kind() != "pair" {
                     continue;
                 }
@@ -1032,7 +1034,9 @@ impl JsExtractor {
     fn resolve_handler_from_args(&self, args: tree_sitter::Node) -> Option<SymbolId> {
         let mut last_ident: Option<String> = None;
         for i in 0..args.child_count() {
-            let Some(c) = args.child(i) else { continue };
+            let Some(c) = args.child(i as u32) else {
+                continue;
+            };
             if c.kind() == "identifier" {
                 last_ident = Some(self.node_text(c).to_string());
             }
@@ -1099,7 +1103,7 @@ impl JsExtractor {
         decorator: tree_sitter::Node<'a>,
     ) -> Option<(String, Option<tree_sitter::Node<'a>>)> {
         for i in 0..decorator.child_count() {
-            let Some(c) = decorator.child(i) else {
+            let Some(c) = decorator.child(i as u32) else {
                 continue;
             };
             match c.kind() {
@@ -1125,7 +1129,7 @@ impl JsExtractor {
     /// Base path from a class's `@Controller('/base')` decorator, if any.
     fn controller_base(&self, class_node: tree_sitter::Node) -> Option<String> {
         for i in 0..class_node.child_count() {
-            let Some(c) = class_node.child(i) else {
+            let Some(c) = class_node.child(i as u32) else {
                 continue;
             };
             if c.kind() != "decorator" {
@@ -1224,7 +1228,7 @@ impl JsExtractor {
             }
             // Fallback: look for first identifier/member_expression child
             for i in 0..node.child_count() {
-                if let Some(child) = node.child(i) {
+                if let Some(child) = node.child(i as u32) {
                     match child.kind() {
                         "identifier" | "member_expression" | "jsx_namespace_name" => {
                             return Some(self.node_text(child).to_string());
@@ -1238,14 +1242,14 @@ impl JsExtractor {
 
         // For jsx_element, find the jsx_opening_element child
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 if child.kind() == "jsx_opening_element" {
                     if let Some(name_node) = child.child_by_field_name("name") {
                         return Some(self.node_text(name_node).to_string());
                     }
                     // Fallback: first identifier child
                     for j in 0..child.child_count() {
-                        if let Some(grandchild) = child.child(j) {
+                        if let Some(grandchild) = child.child(j as u32) {
                             match grandchild.kind() {
                                 "identifier" | "member_expression" | "jsx_namespace_name" => {
                                     return Some(self.node_text(grandchild).to_string());
@@ -1264,7 +1268,7 @@ impl JsExtractor {
 
 fn check_static(node: tree_sitter::Node, source: &str) -> bool {
     for i in 0..node.child_count() {
-        if let Some(child) = node.child(i) {
+        if let Some(child) = node.child(i as u32) {
             if let Ok(text) = child.utf8_text(source.as_bytes()) {
                 if text == "static" {
                     return true;
@@ -1278,7 +1282,7 @@ fn check_static(node: tree_sitter::Node, source: &str) -> bool {
 /// TS accessibility modifiers; JS methods are always public.
 fn extract_method_visibility(node: tree_sitter::Node, source: &str) -> Visibility {
     for i in 0..node.child_count() {
-        if let Some(child) = node.child(i) {
+        if let Some(child) = node.child(i as u32) {
             if child.kind() == "accessibility_modifier" {
                 let text = child
                     .utf8_text(source.as_bytes())
@@ -1300,7 +1304,7 @@ fn count_params(node: tree_sitter::Node) -> u8 {
     if let Some(params) = node.child_by_field_name("parameters") {
         let mut count: u8 = 0;
         for i in 0..params.child_count() {
-            if let Some(child) = params.child(i) {
+            if let Some(child) = params.child(i as u32) {
                 match child.kind() {
                     "identifier"
                     | "required_parameter"

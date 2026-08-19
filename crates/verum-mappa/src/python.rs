@@ -15,7 +15,7 @@ pub fn parse_file(path: &Path) -> Result<Ir> {
 
     let mut parser = tree_sitter::Parser::new();
     parser
-        .set_language(&tree_sitter_python::language())
+        .set_language(&tree_sitter_python::LANGUAGE.into())
         .map_err(|e| anyhow::anyhow!("Failed to set Python language: {}", e))?;
 
     let tree = parser
@@ -179,7 +179,7 @@ impl PythonExtractor {
             _ => {
                 let child_count = node.child_count();
                 for i in 0..child_count {
-                    if let Some(child) = node.child(i) {
+                    if let Some(child) = node.child(i as u32) {
                         self.walk_node(child);
                     }
                 }
@@ -227,7 +227,7 @@ impl PythonExtractor {
         if let Some(body) = node.child_by_field_name("body") {
             let child_count = body.child_count();
             for i in 0..child_count {
-                if let Some(child) = body.child(i) {
+                if let Some(child) = body.child(i as u32) {
                     self.walk_node(child);
                 }
             }
@@ -292,7 +292,7 @@ impl PythonExtractor {
         if let Some(body) = node.child_by_field_name("body") {
             let child_count = body.child_count();
             for i in 0..child_count {
-                if let Some(child) = body.child(i) {
+                if let Some(child) = body.child(i as u32) {
                     self.walk_node(child);
                 }
             }
@@ -310,7 +310,7 @@ impl PythonExtractor {
                     let mut is_static = false;
                     let child_count = node.child_count();
                     for i in 0..child_count {
-                        if let Some(child) = node.child(i) {
+                        if let Some(child) = node.child(i as u32) {
                             if child.kind() == "decorator" {
                                 let text = self.node_text(child);
                                 if text.contains("staticmethod") || text.contains("classmethod") {
@@ -407,7 +407,7 @@ impl PythonExtractor {
         if let Some(args) = node.child_by_field_name("arguments") {
             let child_count = args.child_count();
             for i in 0..child_count {
-                if let Some(child) = args.child(i) {
+                if let Some(child) = args.child(i as u32) {
                     self.walk_node(child);
                 }
             }
@@ -418,7 +418,7 @@ impl PythonExtractor {
     /// argument in an `argument_list` node.
     fn first_string_arg(&self, args: tree_sitter::Node) -> Option<String> {
         for i in 0..args.child_count() {
-            let child = args.child(i)?;
+            let child = args.child(i as u32)?;
             if child.kind() == "string" {
                 return Some(self.py_string_value(child));
             }
@@ -430,7 +430,7 @@ impl PythonExtractor {
     /// any prefix (`f"..."`, `b"..."`). Falls back to trimming quote chars.
     fn py_string_value(&self, node: tree_sitter::Node) -> String {
         for i in 0..node.child_count() {
-            if let Some(child) = node.child(i) {
+            if let Some(child) = node.child(i as u32) {
                 if child.kind() == "string_content" {
                     return self.node_text(child).to_string();
                 }
@@ -442,7 +442,7 @@ impl PythonExtractor {
     /// Read the `prefix="/api"` / `url_prefix="/api"` keyword argument value.
     fn prefix_kwarg(&self, args: tree_sitter::Node) -> Option<String> {
         for i in 0..args.child_count() {
-            let child = args.child(i)?;
+            let child = args.child(i as u32)?;
             if child.kind() == "keyword_argument" {
                 let name = child
                     .child_by_field_name("name")
@@ -464,7 +464,9 @@ impl PythonExtractor {
     fn methods_kwarg(&self, args: tree_sitter::Node) -> Vec<HttpMethod> {
         let mut out = Vec::new();
         for i in 0..args.child_count() {
-            let Some(child) = args.child(i) else { continue };
+            let Some(child) = args.child(i as u32) else {
+                continue;
+            };
             if child.kind() != "keyword_argument" {
                 continue;
             }
@@ -477,7 +479,7 @@ impl PythonExtractor {
             }
             if let Some(value) = child.child_by_field_name("value") {
                 for j in 0..value.child_count() {
-                    if let Some(item) = value.child(j) {
+                    if let Some(item) = value.child(j as u32) {
                         if item.kind() == "string" {
                             if let Some(m) = http_method_from_verb(&self.py_string_value(item)) {
                                 out.push(m);
@@ -495,7 +497,7 @@ impl PythonExtractor {
     fn route_decorators(&self, decorated: tree_sitter::Node) -> Vec<(HttpMethod, String, String)> {
         let mut out = Vec::new();
         for i in 0..decorated.child_count() {
-            let Some(child) = decorated.child(i) else {
+            let Some(child) = decorated.child(i as u32) else {
                 continue;
             };
             if child.kind() != "decorator" {
@@ -504,7 +506,7 @@ impl PythonExtractor {
             // Find the call node inside the decorator (`app.get("/x")`).
             let mut call = None;
             for j in 0..child.child_count() {
-                if let Some(gc) = child.child(j) {
+                if let Some(gc) = child.child(j as u32) {
                     if gc.kind() == "call" {
                         call = Some(gc);
                         break;
@@ -633,7 +635,7 @@ impl PythonExtractor {
     fn django_view_controller(&self, args: tree_sitter::Node) -> Option<SymbolId> {
         let mut seen_string = false;
         for i in 0..args.child_count() {
-            let child = args.child(i)?;
+            let child = args.child(i as u32)?;
             match child.kind() {
                 "," | "(" | ")" => continue,
                 "string" => {
@@ -765,7 +767,7 @@ fn count_python_params(node: tree_sitter::Node, source: &str) -> u8 {
     if let Some(params) = node.child_by_field_name("parameters") {
         let mut count: u8 = 0;
         for i in 0..params.child_count() {
-            if let Some(child) = params.child(i) {
+            if let Some(child) = params.child(i as u32) {
                 let is_param = matches!(
                     child.kind(),
                     "identifier"

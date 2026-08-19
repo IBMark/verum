@@ -143,7 +143,7 @@
     },
     "fiber": {
       "by_kind": {
-        "DeadFunction": 46,
+        "DeadFunction": 44,
         "ExactDuplicate": 9,
         "GodClass": 12,
         "LongFunction": 109,
@@ -154,7 +154,7 @@
       "group": "web",
       "score_overall": 94,
       "sha": "fec5891c18437669ade008e10bb82b8a3b7ed530",
-      "total_findings": 565,
+      "total_findings": 563,
       "url": "https://github.com/gofiber/fiber.git"
     },
     "gin": {
