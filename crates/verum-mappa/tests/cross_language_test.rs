@@ -11,9 +11,14 @@ fn build(dir: &std::path::Path) -> verum_nucleus::Ir {
     verum_mappa::Atlas::new(config).build().expect("build")
 }
 
+/// Per-call sequence number: tests in one binary share a pid, so a pid-only
+/// temp dir would be a shared path that parallel tests race on.
+static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 #[test]
 fn js_fetch_links_to_laravel_controller() {
-    let dir = std::env::temp_dir().join(format!("verum_xlang_{}", std::process::id()));
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("verum_xlang_{}_{seq}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("routes")).unwrap();
     std::fs::create_dir_all(dir.join("app/Http/Controllers")).unwrap();

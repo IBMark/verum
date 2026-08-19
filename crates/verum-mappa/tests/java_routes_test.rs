@@ -27,8 +27,16 @@ fn build(dir: &Path) -> verum_nucleus::Ir {
 }
 
 fn unique_dir(tag: &str) -> PathBuf {
+    // Tests run in parallel threads sharing one pid; the sequence number
+    // keeps dirs unique even if two tests ever pass the same tag.
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let mut dir = std::env::temp_dir();
-    dir.push(format!("verum_java_routes_{}_{}", tag, std::process::id()));
+    dir.push(format!(
+        "verum_java_routes_{}_{}_{seq}",
+        tag,
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("mkdir");
     dir

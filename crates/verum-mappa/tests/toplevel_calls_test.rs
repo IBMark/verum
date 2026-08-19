@@ -12,32 +12,40 @@ use verum_nucleus::{CallTarget, Ir};
 static SAMPLE_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 fn write_sample(source: &str, ext: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("verum_toplevel_test_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
     let seq = SAMPLE_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let path = dir.join(format!("sample_{seq}.{ext}"));
+    let dir =
+        std::env::temp_dir().join(format!("verum_toplevel_test_{}_{seq}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let path = dir.join(format!("sample.{ext}"));
     std::fs::write(&path, source).expect("write sample");
     path
+}
+
+/// Best-effort teardown: remove the per-call temp dir a sample was written to.
+fn remove_sample(path: &std::path::Path) {
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
 
 fn parse_php(source: &str) -> Ir {
     let path = write_sample(source, "php");
     let ir = verum_mappa::php::parse_file(&path).expect("should parse PHP source");
-    let _ = std::fs::remove_file(&path);
+    remove_sample(&path);
     ir
 }
 
 fn parse_python(source: &str) -> Ir {
     let path = write_sample(source, "py");
     let ir = verum_mappa::python::parse_file(&path).expect("should parse Python source");
-    let _ = std::fs::remove_file(&path);
+    remove_sample(&path);
     ir
 }
 
 fn parse_js(source: &str) -> Ir {
     let path = write_sample(source, "js");
     let ir = verum_mappa::javascript::parse_file(&path, false).expect("should parse JS source");
-    let _ = std::fs::remove_file(&path);
+    remove_sample(&path);
     ir
 }
 

@@ -10,7 +10,12 @@ use std::path::PathBuf;
 use verum_nucleus::Ir;
 
 fn temp_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("verum-idcol-{}-{}", tag, std::process::id()));
+    // Tests run in parallel threads sharing one pid; the sequence number
+    // keeps dirs unique even if two tests ever pass the same tag.
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let dir =
+        std::env::temp_dir().join(format!("verum-idcol-{}-{}-{seq}", tag, std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }

@@ -4,12 +4,13 @@
 
 use verum_nucleus::CallTarget;
 
+/// Tests run in parallel threads sharing one pid; pid+len is not unique
+/// (equal-length sources collide), so each call gets a sequence number.
+static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 fn parse(src: &str) -> verum_nucleus::Ir {
-    let dir = std::env::temp_dir().join(format!(
-        "verum-recv-test-{}-{}",
-        std::process::id(),
-        src.len()
-    ));
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("verum-recv-test-{}-{seq}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("lib.rs");
     std::fs::write(&file, src).unwrap();

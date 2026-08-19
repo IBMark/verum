@@ -3,9 +3,25 @@
 
 use std::process::Command;
 
+/// Run the just-built `verum` binary, retrying on ETXTBSY: on CI another
+/// process can transiently hold the freshly linked executable open for
+/// writing, which makes exec fail with "text file busy".
+fn run_verum(args: &[&str]) -> std::process::Output {
+    let bin = env!("CARGO_BIN_EXE_verum");
+    let mut attempts = 0u32;
+    loop {
+        match Command::new(bin).args(args).output() {
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 50 => {
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            other => return other.expect("run verum"),
+        }
+    }
+}
+
 #[test]
 fn sarif_report_is_valid() {
-    let bin = env!("CARGO_BIN_EXE_verum");
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
@@ -13,10 +29,7 @@ fn sarif_report_is_valid() {
         .unwrap()
         .join("tests/fixtures/php_security");
 
-    let out = Command::new(bin)
-        .args(["report", fixture.to_str().unwrap(), "--format", "sarif"])
-        .output()
-        .expect("run verum");
+    let out = run_verum(&["report", fixture.to_str().unwrap(), "--format", "sarif"]);
     assert!(out.status.success(), "verum report exited non-zero");
 
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("output is valid JSON");

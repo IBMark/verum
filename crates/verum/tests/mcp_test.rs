@@ -12,16 +12,32 @@ fn fixture_path() -> std::path::PathBuf {
         .join("tests/fixtures/php_simple")
 }
 
+/// Spawn the just-built `verum` binary, retrying on ETXTBSY: on CI another
+/// process can transiently hold the freshly linked executable open for
+/// writing, which makes exec fail with "text file busy".
+fn spawn_verum_mcp() -> std::process::Child {
+    let mut attempts = 0u32;
+    loop {
+        let spawned = Command::new(env!("CARGO_BIN_EXE_verum"))
+            .arg("mcp")
+            .arg(fixture_path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn();
+        match spawned {
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 50 => {
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            other => return other.expect("spawn verum mcp"),
+        }
+    }
+}
+
 #[test]
 fn mcp_session_answers_fact_queries() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_verum"))
-        .arg("mcp")
-        .arg(fixture_path())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn verum mcp");
+    let mut child = spawn_verum_mcp();
 
     let mut stdin = child.stdin.take().unwrap();
     writeln!(

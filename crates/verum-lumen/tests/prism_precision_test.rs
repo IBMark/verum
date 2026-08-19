@@ -8,9 +8,18 @@ use std::path::{Path, PathBuf};
 use verum_lumen::SecurityConfig;
 use verum_nucleus::{FindingKind, HttpMethod, Ir, Route, Severity};
 
+/// Tests run in parallel threads sharing one pid, so a per-call sequence
+/// number keeps every temp dir unique even if two tests pass the same tag.
+static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// Parse a PHP snippet with Atlas into an IR rooted at a unique temp dir.
 fn php_ir(tag: &str, file_name: &str, src: &str) -> (Ir, PathBuf) {
-    let dir = std::env::temp_dir().join(format!("verum-precision-{}-{}", std::process::id(), tag));
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!(
+        "verum-precision-{}-{}-{seq}",
+        std::process::id(),
+        tag
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join(file_name), src).unwrap();
 
@@ -126,8 +135,9 @@ fn rbac_on_group_file(
     content: &str,
     route_lines: &[u32],
 ) -> Vec<verum_nucleus::Finding> {
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let dir = std::env::temp_dir().join(format!(
-        "verum-precision-rbac-{}-{}",
+        "verum-precision-rbac-{}-{}-{seq}",
         std::process::id(),
         tag
     ));

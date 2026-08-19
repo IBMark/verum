@@ -3,6 +3,11 @@
 
 use verum_nucleus::FindingKind;
 
+/// Tests run in parallel threads sharing one pid, so temp dirs need a
+/// per-call sequence number - a pid-only (or pid+len) name can collide and
+/// race one test's `remove_dir_all` against another's build.
+static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 fn audit(src: &str) -> Vec<verum_nucleus::Finding> {
     audit_named("lib.rs", src)
 }
@@ -11,12 +16,8 @@ fn audit(src: &str) -> Vec<verum_nucleus::Finding> {
 /// fresh temp root), so tests can exercise path-based filtering (`build.rs`,
 /// `tests/...`).
 fn audit_named(rel_path: &str, src: &str) -> Vec<verum_nucleus::Finding> {
-    let dir = std::env::temp_dir().join(format!(
-        "verum-rust-taint-{}-{}-{}",
-        std::process::id(),
-        rel_path.replace(['/', '\\'], "_"),
-        src.len()
-    ));
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("verum-rust-taint-{}-{seq}", std::process::id()));
     let target = dir.join(rel_path);
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent).unwrap();
@@ -105,7 +106,9 @@ fn command_in_test_harness_is_not_flagged() {
 fn php_taint_regression_still_fires() {
     // PHP taint behaviour must be entirely unaffected by the Rust-only
     // filtering: unsanitized $_GET into a raw SQL query is still Critical.
-    let dir = std::env::temp_dir().join(format!("verum-php-taint-regr-{}", std::process::id()));
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let dir =
+        std::env::temp_dir().join(format!("verum-php-taint-regr-{}-{seq}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("q.php"),

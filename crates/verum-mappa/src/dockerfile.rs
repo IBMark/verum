@@ -529,11 +529,12 @@ mod tests {
     use std::io::Write;
 
     fn parse_dockerfile_str(content: &str) -> Ir {
-        let id = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("verum_docker_test_{}", id));
+        // pid + per-call counter: unique across parallel test threads, unlike
+        // the wall clock (two threads can read equal nanos).
+        static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir =
+            std::env::temp_dir().join(format!("verum_docker_test_{}_{seq}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("Dockerfile");
         let mut f = std::fs::File::create(&path).unwrap();

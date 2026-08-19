@@ -6,6 +6,10 @@
 
 use verum_nucleus::Ir;
 
+/// Tests across this binary run in parallel threads that share one pid, so a
+/// pid-only temp dir is a shared path - each call gets a fresh dir instead.
+static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 fn parse_php(dir: &std::path::Path, name: &str, source: &str) -> Ir {
     let path = dir.join(name);
     std::fs::write(&path, source).expect("write sample");
@@ -14,7 +18,8 @@ fn parse_php(dir: &std::path::Path, name: &str, source: &str) -> Ir {
 
 #[test]
 fn dynamic_calls_only_lower_confidence_where_they_can_reach() {
-    let dir = std::env::temp_dir().join(format!("verum_dynamic_conf_{}", std::process::id()));
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("verum_dynamic_conf_{}_{seq}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create temp dir");
 
     let mut ir = parse_php(

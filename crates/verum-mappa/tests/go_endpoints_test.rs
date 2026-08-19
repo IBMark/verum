@@ -2,11 +2,16 @@ use std::io::Write;
 
 use verum_nucleus::HttpMethod;
 
+/// Tests run in parallel threads sharing one pid, so file names need a
+/// per-call sequence number on top of the pid to stay unique.
+static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// Write `source` to a uniquely-named temp `.go` file and parse it.
 fn parse_go(name: &str, source: &str) -> verum_nucleus::Ir {
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let mut path = std::env::temp_dir();
     path.push(format!(
-        "verum_go_endpoints_{}_{}.go",
+        "verum_go_endpoints_{}_{}_{seq}.go",
         name,
         std::process::id()
     ));

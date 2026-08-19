@@ -11,13 +11,14 @@ use verum_nucleus::{Ir, SymbolKind};
 static SAMPLE_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 fn parse(source: &str) -> Ir {
-    let dir = std::env::temp_dir().join(format!("verum_precision_test_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("create temp dir");
     let seq = SAMPLE_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let path = dir.join(format!("sample_{seq}.rs"));
+    let dir =
+        std::env::temp_dir().join(format!("verum_precision_test_{}_{seq}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let path = dir.join("sample.rs");
     std::fs::write(&path, source).expect("write sample");
     let ir = verum_mappa::rust_lang::parse_file(&path).expect("should parse Rust source");
-    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir_all(&dir);
     ir
 }
 

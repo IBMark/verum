@@ -2,11 +2,16 @@ use std::io::Write;
 
 use verum_nucleus::HttpMethod;
 
+/// Tests run in parallel threads sharing one pid, so file names need a
+/// per-call sequence number on top of the pid to stay unique.
+static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// Write `source` to a uniquely-named temp `.py` file and parse it.
 fn parse_python(name: &str, source: &str) -> verum_nucleus::Ir {
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let mut path = std::env::temp_dir();
     path.push(format!(
-        "verum_py_routes_{}_{}.py",
+        "verum_py_routes_{}_{}_{seq}.py",
         name,
         std::process::id()
     ));
@@ -21,14 +26,16 @@ fn parse_python(name: &str, source: &str) -> verum_nucleus::Ir {
 
 /// Same, but with an explicit filename (needed for Django `urls.py` detection).
 fn parse_python_named(file_name: &str, source: &str) -> verum_nucleus::Ir {
-    let mut path = std::env::temp_dir();
-    path.push(format!("verum_py_{}_{}", std::process::id(), file_name));
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("verum_py_{}_{seq}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let path = dir.join(file_name);
     {
         let mut f = std::fs::File::create(&path).expect("create temp file");
         f.write_all(source.as_bytes()).expect("write temp file");
     }
     let ir = verum_mappa::python::parse_file(&path).expect("parse python");
-    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir_all(&dir);
     ir
 }
 

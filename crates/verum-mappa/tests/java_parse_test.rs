@@ -5,22 +5,18 @@ use verum_nucleus::{CallTarget, SymbolKind, Visibility};
 static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 fn parse(src: &str) -> verum_nucleus::Ir {
-    // Tests run in parallel - each needs its own file, or concurrent
-    // create/truncate+write races a sibling's read of the same path.
+    // Tests run in parallel threads sharing one pid - each call gets its own
+    // dir (pid + sequence number), so no path is ever shared or raced on.
     let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let dir = std::env::temp_dir().join(format!("verum_java_test_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("verum_java_test_{}_{seq}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(format!("Sample_{}_{seq}.java", fastid(src)));
+    let path = dir.join("Sample.java");
     let mut f = std::fs::File::create(&path).unwrap();
     f.write_all(src.as_bytes()).unwrap();
-    verum_mappa::java::parse_file(&path).expect("should parse Java")
-}
-
-fn fastid(s: &str) -> u64 {
-    // cheap deterministic-ish id to keep temp filenames distinct per test
-    s.bytes().fold(1469598103934665603u64, |h, b| {
-        (h ^ b as u64).wrapping_mul(1099511628211)
-    })
+    drop(f);
+    let ir = verum_mappa::java::parse_file(&path).expect("should parse Java");
+    let _ = std::fs::remove_dir_all(&dir);
+    ir
 }
 
 const SRC: &str = r#"

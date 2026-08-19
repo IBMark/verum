@@ -4,19 +4,21 @@ use std::io::Write;
 
 use verum_nucleus::HttpMethod;
 
+/// Tests run in parallel threads sharing one pid; a pid + sequence number is
+/// unique per call, unlike the wall clock (two threads can read equal nanos).
+static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 fn parse_php(src: &str) -> verum_nucleus::Ir {
-    let dir = std::env::temp_dir().join(format!("verum_php_http_{}", std::process::id()));
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("verum_php_http_{}_{seq}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(format!(
-        "svc_{}.php",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let path = dir.join("svc.php");
     let mut f = std::fs::File::create(&path).unwrap();
     f.write_all(src.as_bytes()).unwrap();
-    verum_mappa::php::parse_file(&path).expect("parse php")
+    drop(f);
+    let ir = verum_mappa::php::parse_file(&path).expect("parse php");
+    let _ = std::fs::remove_dir_all(&dir);
+    ir
 }
 
 fn method_eq(a: &HttpMethod, b: &HttpMethod) -> bool {

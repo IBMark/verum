@@ -7,9 +7,14 @@
 
 use verum_nucleus::{CallTarget, Ir, Language, SymbolId};
 
+/// Tests run in parallel threads sharing one pid; a pid-only dir would make
+/// one test's `remove_dir_all` race the other's build.
+static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 fn build(files: &[(&str, &str)]) -> Ir {
-    let seq = std::process::id();
-    let dir = std::env::temp_dir().join(format!("verum_resolver_test_{seq}"));
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let dir =
+        std::env::temp_dir().join(format!("verum_resolver_test_{}_{seq}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create temp crate");
     for (name, source) in files {
