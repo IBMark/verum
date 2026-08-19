@@ -367,6 +367,8 @@ fn finding_kind_label(k: &FindingKind) -> &'static str {
         FindingKind::SplitDatagramMessage => "SplitDatagramMessage",
         FindingKind::OversizedDatagram => "OversizedDatagram",
         FindingKind::UnvalidatedLengthPrefix => "UnvalidatedLengthPrefix",
+        FindingKind::NonConstantTimeComparison => "NonConstantTimeComparison",
+        FindingKind::StaticAeadNonce => "StaticAeadNonce",
     }
 }
 
@@ -446,6 +448,8 @@ fn is_security(k: &FindingKind) -> bool {
             | FindingKind::WeakRandom
             | FindingKind::OpenRedirect
             | FindingKind::PathTraversal
+            | FindingKind::NonConstantTimeComparison
+            | FindingKind::StaticAeadNonce
     )
 }
 

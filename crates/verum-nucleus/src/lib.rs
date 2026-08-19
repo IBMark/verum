@@ -359,6 +359,18 @@ pub enum FindingKind {
     /// A call that misuses a known crate's documented behaviour (e.g. tokio
     /// `interval` first-tick-immediate, udp-stream one-write-one-datagram).
     CrateApiMisuse,
+    // Crypto hygiene - scored.
+    /// `==`/`!=` used to compare a security-sensitive value (a MAC, tag,
+    /// signature, token, secret, digest, or session/auth identifier) instead
+    /// of a constant-time comparison - a naive comparison short-circuits on
+    /// the first mismatched byte, leaking timing information an attacker can
+    /// use to forge the value byte-by-byte.
+    NonConstantTimeComparison,
+    /// A constant/hardcoded nonce or IV reaches an AEAD `.encrypt(`/`.seal(`
+    /// call, or a `Nonce` is built from a literal byte array - reusing a
+    /// nonce with the same key breaks confidentiality (and, for most AEAD
+    /// modes, integrity) of every message encrypted under it.
+    StaticAeadNonce,
 }
 
 /// A performance objective a codebase can be optimised for.
