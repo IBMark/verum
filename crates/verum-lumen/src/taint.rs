@@ -60,6 +60,10 @@ const RUST_SANITIZERS: &[&str] = &[
     "shell_escape",
 ];
 
+// Raw-query entry points only. Parameterized ORM/driver methods (`->query(`,
+// `.execute(`, `db.query(`) are almost always safe, and matched interprocedurally
+// they reported "SQL injection" on essentially every controller that reaches the
+// ORM - so they are deliberately excluded to avoid mass false positives.
 const SQL_SINKS: &[&str] = &[
     "DB::raw(",
     "->raw(",
@@ -69,11 +73,7 @@ const SQL_SINKS: &[&str] = &[
     "havingRaw(",
     "mysql_query(",
     "mysqli_query(",
-    "->query(",
-    "->exec(",
     "->unprepared(",
-    "db.query(",
-    ".execute(",
     // Rust: sqlx / diesel raw query entry points.
     "sqlx::query(",
     "sqlx::query_as(",
@@ -90,14 +90,10 @@ const EXEC_SINKS: &[&str] = &[
     // Rust: process spawning.
     "Command::new(",
 ];
-const HTML_SINKS: &[&str] = &[
-    "echo ",
-    "echo(",
-    "print ",
-    "print(",
-    "res.send(",
-    "res.write(",
-];
+// PHP direct-output sinks. Express `res.send(`/`res.write(` were removed: they
+// usually carry JSON, files, or generated content, so treating them as XSS sinks
+// produced false positives (e.g. sending a generated schema as a file).
+const HTML_SINKS: &[&str] = &["echo ", "echo(", "print ", "print("];
 /// Filesystem path operations - tainted input here is `../` traversal.
 const PATH_SINKS: &[&str] = &[
     "fs::read(",
@@ -367,12 +363,29 @@ pub fn analyse_with_paths(ir: &Ir) -> (Vec<Finding>, Vec<TaintPath>) {
     }
 
     // Cross-function flows: tainted argument into a sink-bearing function.
+    // Callees are resolved by name, so a common method name (sort, set, count,
+    // get, ...) can collide with an unrelated same-named function that happens to
+    // contain a sink. Count definitions per name so ambiguous ones can be skipped.
+    let mut name_counts: HashMap<&str, usize> = HashMap::new();
+    for s in ir.symbols.values() {
+        if matches!(
+            s.kind,
+            SymbolKind::Function | SymbolKind::Method | SymbolKind::StaticMethod
+        ) {
+            *name_counts.entry(s.name.as_str()).or_default() += 1;
+        }
+    }
     let mut seen_cross: HashSet<(PathBuf, u32, String)> = HashSet::new();
     for (_, scan) in &scans {
         for call in &scan.tainted_arg_calls {
             let Some((callee_id, sinks)) = sink_fns.get(&call.callee) else {
                 continue;
             };
+            // Ambiguous callee: several functions share this name, so we cannot
+            // say the tainted call reaches this particular sink-bearing one.
+            if name_counts.get(call.callee.as_str()).copied().unwrap_or(0) > 1 {
+                continue;
+            }
             // Same-line direct sinks are already reported above.
             if !seen_cross.insert((call.file.clone(), call.line, call.callee.clone())) {
                 continue;
