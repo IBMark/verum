@@ -24,6 +24,15 @@ pub fn analyse(ir: &Ir, config: &NamingConfig) -> Vec<Finding> {
             continue;
         }
 
+        // Go uses MixedCaps for everything, with capitalization encoding export
+        // (exported `PascalCase`, unexported `camelCase`). A single cross-language
+        // convention flags every unexported type and half the methods, and
+        // golint-style checks are too pedantic to run by default. Skip Go until
+        // dedicated idiomatic rules exist.
+        if sym.language == Language::Go {
+            continue;
+        }
+
         let rules = get_rules_for_language(&sym.language, config);
 
         match &sym.kind {

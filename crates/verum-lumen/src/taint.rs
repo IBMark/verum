@@ -27,19 +27,14 @@ const JS_SOURCES: &[&str] = &["req.query", "req.params", "req.body"];
 /// Extractor bindings themselves (`Path(id): Path<...>`) are handled by
 /// `RUST_EXTRACTOR_RE`, which taints the bound identifier.
 ///
-/// `env::var`/`env::var_os` are deliberately NOT sources. Environment
-/// variables are trusted build/deploy configuration in the overwhelming
-/// majority of Rust code (build scripts, service config), not attacker input,
-/// and treating them as a source made every `Command::new` reading `RUSTC`,
-/// `PATH`, etc. a CRITICAL false positive. Only argv, stdin, and HTTP request
-/// surfaces remain.
-const RUST_SOURCES: &[&str] = &[
-    "env::args",
-    "io::stdin",
-    "stdin()",
-    ".query_string()",
-    "req.match_info",
-];
+/// `env::var`/`env::var_os` and `env::args` are deliberately NOT sources.
+/// Environment variables are trusted build/deploy configuration, and in the
+/// CLI-heavy Rust ecosystem a program's own argv is a path or subcommand it is
+/// *meant* to act on - treating either as attacker input flagged every
+/// `Command::new` reading `PATH` and every `File::open(arg)` as CRITICAL. Only
+/// stdin, network reads, and HTTP request surfaces (extractors, query strings,
+/// match info) remain, where the data genuinely crosses a trust boundary.
+const RUST_SOURCES: &[&str] = &["io::stdin", "stdin()", ".query_string()", "req.match_info"];
 
 const PHP_SANITIZERS: &[&str] = &[
     "intval(",

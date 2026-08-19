@@ -19,7 +19,86 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use verum_nucleus::{DuplicateGroup, Finding, Ir, Score};
+use verum_nucleus::{DuplicateGroup, Finding, FindingKind, Ir, Score};
+
+/// True for files that are not shipped application code - tests, examples,
+/// vendored dependencies, and generated output. Code-quality and security
+/// findings in these are noise (a hardcoded password in a test fixture, an
+/// unused test helper), so they are filtered from the default report. The
+/// files stay in the IR so their calls still count toward reachability.
+///
+/// `fixtures` is deliberately *not* auxiliary: this project's own test suite
+/// points the analyzer at fixture trees as real targets.
+pub fn is_auxiliary_path(path: &str) -> bool {
+    if path.contains("fixtures") {
+        return false;
+    }
+    // Match on whole path segments so a leading or trailing `vendor/` counts the
+    // same as a nested `/vendor/`.
+    const DIR_SEGMENTS: &[&str] = &[
+        "test",
+        "tests",
+        "__tests__",
+        "spec",
+        "specs",
+        "example",
+        "examples",
+        "sample",
+        "samples",
+        "vendor",
+        "node_modules",
+        "benches",
+        "bench",
+        "testdata",
+        "mocks",
+        "dist",
+        "build",
+        "target",
+        "generated",
+    ];
+    if path
+        .split(['/', '\\'])
+        .any(|seg| DIR_SEGMENTS.contains(&seg))
+    {
+        return true;
+    }
+    const FILE_MARKERS: &[&str] = &[
+        "_test.",
+        ".test.",
+        ".spec.",
+        "_spec.",
+        ".min.js",
+        ".pb.go",
+        "_pb2.py",
+        ".generated.",
+    ];
+    FILE_MARKERS.iter().any(|m| path.contains(m))
+}
+
+/// Infrastructure and compliance findings describe a deployed artifact, not
+/// source hygiene, so they are reported wherever they occur - including in a
+/// sample manifest under `examples/`. Everything else is suppressed in
+/// auxiliary files by [`is_auxiliary_path`].
+fn kind_survives_in_auxiliary(kind: &FindingKind) -> bool {
+    matches!(
+        kind,
+        FindingKind::OpenSecurityGroup
+            | FindingKind::UnencryptedStorage
+            | FindingKind::PublicResource
+            | FindingKind::IamOverPermission
+            | FindingKind::RunningAsRoot
+            | FindingKind::PrivilegedContainer
+            | FindingKind::MissingResourceLimits
+            | FindingKind::MissingHealthProbes
+            | FindingKind::UnpinnedImage
+            | FindingKind::NoNetworkPolicy
+            | FindingKind::SecretInEnvVar
+            | FindingKind::HardcodedCredential
+            | FindingKind::PciViolation
+            | FindingKind::GdprViolation
+            | FindingKind::Soc2Violation
+    )
+}
 
 /// Which naming convention a symbol category should follow.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -176,6 +255,13 @@ impl Prism {
 
         let chain_findings = chains::analyse(ir);
         findings.extend(chain_findings);
+
+        // Drop source-hygiene and security findings that land in test, example,
+        // vendored, or generated files - they are noise, not shipped-code
+        // defects. Infrastructure/compliance findings are kept everywhere.
+        findings.retain(|f| {
+            kind_survives_in_auxiliary(&f.kind) || !is_auxiliary_path(&f.file.to_string_lossy())
+        });
 
         // Several passes iterate HashMaps; sort so the same input always
         // produces byte-identical output.

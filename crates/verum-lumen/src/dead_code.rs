@@ -30,6 +30,40 @@ const MAGIC_METHODS: &[&str] = &[
     "tearDown",
 ];
 
+/// Go methods called implicitly or through a standard-library interface, so a
+/// static call graph never sees a caller. `Get*` protobuf accessors live in
+/// generated `.pb.go` files, which are filtered as auxiliary paths elsewhere.
+fn is_go_implicit_method(name: &str) -> bool {
+    matches!(
+        name,
+        "init"
+            | "String"
+            | "GoString"
+            | "Error"
+            | "MarshalJSON"
+            | "UnmarshalJSON"
+            | "MarshalText"
+            | "UnmarshalText"
+            | "MarshalBinary"
+            | "UnmarshalBinary"
+            | "MarshalYAML"
+            | "UnmarshalYAML"
+            | "Read"
+            | "Write"
+            | "Close"
+            | "Seek"
+            | "Flush"
+            | "ServeHTTP"
+            | "Reset"
+            | "Len"
+            | "Less"
+            | "Swap"
+            | "ProtoReflect"
+            | "ProtoMessage"
+            | "Descriptor"
+    )
+}
+
 /// Laravel framework methods that are called by the framework, not user code.
 const LARAVEL_ENTRY_METHODS: &[&str] = &[
     // Service providers
@@ -338,6 +372,14 @@ pub fn analyse(ir: &Ir, config: &DeadCodeConfig) -> Vec<Finding> {
             || sym.name == "new"
             || (sym.name.starts_with("__") && sym.name.ends_with("__") && sym.name.len() > 4)
         {
+            continue;
+        }
+
+        // Go framework hooks: `init` runs at package load, and the standard
+        // interface methods (Stringer, error, json.Marshaler, io.Reader, sort,
+        // protobuf, ...) are called through interfaces the static call graph
+        // cannot see. Flagging them as dead is a false positive.
+        if sym.language == Language::Go && is_go_implicit_method(&sym.name) {
             continue;
         }
 
