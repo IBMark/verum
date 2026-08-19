@@ -1,0 +1,13 @@
+/target
+**/*.rs.bk
+.DS_Store
+*.swp
+/verum.baseline.json
+
+# AI-assistant scratch — never commit
+CLAUDE.md
+AGENTS.md
+AGENT.md
+.claude/
+.cursor/
+.aider*
