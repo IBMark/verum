@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-08-19
+
+### Added
+- SARIF 2.1.0 report output (`verum report --format sarif`), so findings can be
+  uploaded to GitHub code scanning and surface as pull-request annotations and in
+  the repository Security tab.
+- Read-only / idempotent annotations on every MCP tool, so clients can safely
+  auto-approve and cache the calls.
+- `cargo binstall verum` support (fetches the prebuilt binary) and a published
+  container image at `ghcr.io/ibmark/verum`.
+
 ## [0.1.2] - 2026-08-19
 
 ### Changed
@@ -34,6 +45,7 @@ All notable changes to this project are documented here. The format is based on
   dependency audit, and infrastructure checks.
 - Three surfaces: the `verum` CLI, a library facade, and an MCP server.
 
+[0.1.3]: https://github.com/IBMark/verum/releases/tag/v0.1.3
 [0.1.2]: https://github.com/IBMark/verum/releases/tag/v0.1.2
 [0.1.1]: https://github.com/IBMark/verum/releases/tag/v0.1.1
 [0.1.0]: https://crates.io/crates/verum/0.1.0

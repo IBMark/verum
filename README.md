@@ -28,13 +28,18 @@ plus Kubernetes YAML, Dockerfiles, and Terraform.
 ## Install
 
 ```
-cargo install verum
+cargo install verum                 # compile from crates.io
+cargo binstall verum                 # or grab the prebuilt binary, no compile
+docker run --rm -v "$PWD:/work" ghcr.io/ibmark/verum audit .   # or no install
 ```
 
-This puts a `verum` binary on your PATH (Verum builds on stable Rust 1.82 or
-newer). To build from a checkout instead, use `cargo install --path crates/verum`.
-To run against any Linux box without a toolchain, build a static musl binary and
-copy it across:
+Prebuilt binaries for Linux (gnu/musl), macOS (x86_64/arm64), and Windows are
+attached to each [release](https://github.com/IBMark/verum/releases).
+
+`cargo install` builds a `verum` binary on your PATH (Verum builds on stable Rust
+1.82 or newer). To build from a checkout instead, use
+`cargo install --path crates/verum`. For a static Linux binary you can copy
+anywhere:
 
 ```
 cargo build --release --target x86_64-unknown-linux-musl
@@ -60,7 +65,7 @@ verum clean <path>      # audit + preview the dead-code/duplicate fixes
 verum map <path>        # module/symbol graphs, cycles, SPOFs, data flows
 verum gate <path>       # exit non-zero if the deploy-gate thresholds fail
 verum baseline <path>   # snapshot findings so gate only fails on new ones
-verum report <path>     # markdown | json | a self-contained html report
+verum report <path>     # markdown | json | sarif | a self-contained html report
 verum init [path]       # write a default verum.standard.json
 ```
 
@@ -92,6 +97,16 @@ On an existing codebase, snapshot the current findings once with
 `verum baseline .` and commit the result; the gate then fails only on findings
 that are *new* relative to that baseline, so you can adopt it without first
 fixing everything it reports.
+
+`verum report <path> --format sarif` emits SARIF 2.1.0, so findings show up as
+inline pull-request annotations and in the repository's Security tab:
+
+```yaml
+      - run: verum report . --format sarif --out verum.sarif
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: verum.sarif
+```
 
 ## Agent / MCP
 

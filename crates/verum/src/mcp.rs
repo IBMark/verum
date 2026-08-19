@@ -1008,7 +1008,7 @@ fn tool_definitions() -> Vec<Value> {
         "required": ["query"]
     });
 
-    vec![
+    let mut tools = vec![
         json!({
             "name": "overview",
             "description": "Orient in the codebase: size, languages, call-graph shape (resolution rates, critical depth, most central symbols by PageRank), score, and finding count.",
@@ -1108,5 +1108,22 @@ fn tool_definitions() -> Vec<Value> {
             "description": "Duplicate implementations: exact, renamed (identifier-insensitive), and structural copies, grouped with a canonical pick per group.",
             "inputSchema": { "type": "object", "properties": {} }
         }),
-    ]
+    ];
+    // Every Verum tool is a read-only, side-effect-free query over the analyzed
+    // tree. Advertise that through MCP tool annotations so a client can safely
+    // auto-approve and cache the calls.
+    for tool in &mut tools {
+        if let Value::Object(map) = tool {
+            map.insert(
+                "annotations".into(),
+                json!({
+                    "readOnlyHint": true,
+                    "idempotentHint": true,
+                    "destructiveHint": false,
+                    "openWorldHint": false
+                }),
+            );
+        }
+    }
+    tools
 }

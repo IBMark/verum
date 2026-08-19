@@ -1,0 +1,7 @@
+- id: verum-gate
+  name: Verum gate
+  description: Run the Verum deterministic code analyzer and fail on gate violations.
+  entry: verum gate .
+  language: system
+  pass_filenames: false
+  always_run: true

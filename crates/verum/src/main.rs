@@ -57,10 +57,10 @@ enum Commands {
     /// on findings introduced afterwards (ratchet mode for existing codebases)
     Baseline { path: PathBuf },
 
-    /// Generate a report (markdown, json, or a self-contained html web UI)
+    /// Generate a report (markdown, json, sarif, or a self-contained html web UI)
     Report {
         path: PathBuf,
-        /// Output format: markdown | json | html
+        /// Output format: markdown | json | sarif | html
         #[arg(long, default_value = "markdown")]
         format: String,
         /// Write the report to a file instead of stdout
@@ -1720,6 +1720,7 @@ async fn cmd_report(path: &Path, format: &str, out: Option<&Path>) -> Result<()>
             let json = serde_json::to_string(&data)?.replace("</", "<\\/");
             REPORT_HTML_TEMPLATE.replace("__VERUM_DATA__", &json)
         }
+        "sarif" => render_sarif(&result.findings)?,
         _ => {
             let mut md = String::new();
             use std::fmt::Write;
@@ -1781,6 +1782,88 @@ async fn cmd_report(path: &Path, format: &str, out: Option<&Path>) -> Result<()>
     }
 
     Ok(())
+}
+
+/// Map a severity onto a SARIF result level.
+fn severity_to_sarif_level(sev: &verum_nucleus::Severity) -> &'static str {
+    use verum_nucleus::Severity::*;
+    match sev {
+        Critical | High => "error",
+        Medium => "warning",
+        Low | Info => "note",
+    }
+}
+
+/// A path GitHub code scanning can map to a file in the checkout: relative to
+/// the repository root, forward slashes, no leading `./`.
+fn to_relative_uri(file: &Path) -> String {
+    let path = if file.is_absolute() {
+        std::env::current_dir()
+            .ok()
+            .and_then(|cwd| file.strip_prefix(&cwd).ok().map(Path::to_path_buf))
+            .unwrap_or_else(|| file.to_path_buf())
+    } else {
+        file.to_path_buf()
+    };
+    path.to_string_lossy()
+        .replace('\\', "/")
+        .trim_start_matches("./")
+        .to_string()
+}
+
+/// Render findings as SARIF 2.1.0, the format GitHub code scanning ingests
+/// (findings then surface as PR annotations and in the Security tab).
+fn render_sarif(findings: &[verum_nucleus::Finding]) -> Result<String> {
+    use std::collections::BTreeSet;
+
+    let mut rule_ids: BTreeSet<String> = BTreeSet::new();
+    let results: Vec<serde_json::Value> = findings
+        .iter()
+        .map(|f| {
+            let rule = format!("{:?}", f.kind);
+            rule_ids.insert(rule.clone());
+            let start = f.line_start.max(1);
+            let end = f.line_end.max(start);
+            serde_json::json!({
+                "ruleId": rule,
+                "level": severity_to_sarif_level(&f.severity),
+                "message": { "text": f.message },
+                "locations": [{
+                    "physicalLocation": {
+                        "artifactLocation": { "uri": to_relative_uri(&f.file) },
+                        "region": { "startLine": start, "endLine": end }
+                    }
+                }]
+            })
+        })
+        .collect();
+
+    let rules: Vec<serde_json::Value> = rule_ids
+        .iter()
+        .map(|id| {
+            serde_json::json!({
+                "id": id,
+                "name": id,
+                "shortDescription": { "text": id },
+                "helpUri": "https://github.com/IBMark/verum"
+            })
+        })
+        .collect();
+
+    let doc = serde_json::json!({
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [{
+            "tool": { "driver": {
+                "name": "Verum",
+                "informationUri": "https://github.com/IBMark/verum",
+                "version": env!("CARGO_PKG_VERSION"),
+                "rules": rules
+            }},
+            "results": results
+        }]
+    });
+    Ok(serde_json::to_string_pretty(&doc)?)
 }
 
 async fn cmd_init(path: Option<&Path>) -> Result<()> {

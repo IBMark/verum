@@ -10,6 +10,16 @@ keywords.workspace = true
 categories.workspace = true
 description = "Deterministic, whole-program, multi-language code analyzer (CLI and library)."
 
+# `cargo binstall verum` fetches the prebuilt binary from the GitHub release
+# instead of compiling. The release archives are tagged `v{version}`.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-{ target }.{ archive-format }"
+pkg-fmt = "tgz"
+bin-dir = "{ bin }{ binary-ext }"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
+
 [[bin]]
 name = "verum"
 path = "src/main.rs"
