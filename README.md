@@ -46,9 +46,10 @@ $ verum audit tests/fixtures/php_security
 cargo install verum
 ```
 
-This puts a `verum` binary on your PATH. To build from a checkout instead, use
-`cargo install --path crates/verum`. To run against any Linux box without a
-toolchain, build a static musl binary and copy it across:
+This puts a `verum` binary on your PATH (Verum builds on stable Rust 1.82 or
+newer). To build from a checkout instead, use `cargo install --path crates/verum`.
+To run against any Linux box without a toolchain, build a static musl binary and
+copy it across:
 
 ```
 cargo build --release --target x86_64-unknown-linux-musl
