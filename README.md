@@ -1,5 +1,7 @@
 # Verum
 
+[![CI](https://github.com/IBMark/verum/actions/workflows/ci.yml/badge.svg)](https://github.com/IBMark/verum/actions/workflows/ci.yml)
+
 Verum is a deterministic, whole-program code analyzer. It maps a codebase into
 a single intermediate representation - symbols, call graph, routes, data flows -
 then runs a set of analyses over that map: dead code, duplicates, taint-based
