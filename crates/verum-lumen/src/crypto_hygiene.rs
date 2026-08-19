@@ -2,8 +2,9 @@
 //!
 //! Detectors:
 //! - [`FindingKind::NonConstantTimeComparison`]: `==`/`!=` used to compare a
-//!   security-sensitive value (a MAC, tag, signature, token, secret, digest,
-//!   or session/auth identifier) instead of a constant-time comparison. A
+//!   security-sensitive value (an HMAC, signature, secret, digest, or a
+//!   compound like `auth_tag`/`access_token`) instead of a constant-time
+//!   comparison. A
 //!   naive `==` on a byte value short-circuits at the first mismatching byte,
 //!   leaking timing information an attacker can use to forge the value
 //!   byte-by-byte.
@@ -27,20 +28,36 @@ use verum_nucleus::{Finding, FindingKind, Ir, Language, Severity};
 
 /// Whole-word identifier fragments that mark a security-sensitive value.
 /// Matched against `.`/`_`/`:`-delimited components of an identifier, so a
-/// one-word type name like `TokenKind` does not match `token`, but
-/// `expected_mac`, `self.tag`, and `hmac_result` do.
-const SENSITIVE_WORDS: &[&str] = &[
-    "mac",
-    "tag",
-    "hmac",
-    "signature",
-    "sig",
-    "token",
-    "secret",
-    "digest",
-    "auth",
-    "verifier",
-    "session",
+/// one-word type name like `HmacKey` does not match `hmac`, but
+/// `hmac_result` and `self.signature` do.
+///
+/// Deliberately narrow: corpus runs showed the generic single words `tag`,
+/// `token`, `sig`, `mac`, `auth` and `session` are dominated by non-secret
+/// uses on real code (serde's enum `tag`, nom/tree-sitter parser `token`s,
+/// DNSSEC's public `key_tag`/`sig_input`, `mac_addr`, auth modes, session
+/// ids), so those only count in the specific compounds listed in
+/// [`SENSITIVE_PAIRS`].
+const SENSITIVE_WORDS: &[&str] = &["hmac", "cmac", "signature", "secret", "digest", "verifier"];
+
+/// Adjacent component pairs that are security-sensitive together even though
+/// the individual words are too generic on their own: `auth_tag == expected`
+/// is a MAC check, while serde's `self.tag == field` or mio's event `token`
+/// are not.
+const SENSITIVE_PAIRS: &[(&str, &str)] = &[
+    ("auth", "tag"),
+    ("mac", "tag"),
+    ("gcm", "tag"),
+    ("poly1305", "tag"),
+    ("expected", "mac"),
+    ("computed", "mac"),
+    ("access", "token"),
+    ("auth", "token"),
+    ("api", "token"),
+    ("csrf", "token"),
+    ("bearer", "token"),
+    ("refresh", "token"),
+    ("session", "token"),
+    ("secret", "token"),
 ];
 
 /// Extra components that make a `*_hash` identifier a *secret* hash (e.g.
@@ -385,7 +402,8 @@ fn is_enum_variant_path(token: &str) -> bool {
 
 /// True when `token` names a security-sensitive value: one of its
 /// `.`/`_`/`:`-delimited components is a whole-word match against
-/// [`SENSITIVE_WORDS`], or it is a `*_hash` identifier of a secret (e.g.
+/// [`SENSITIVE_WORDS`], two adjacent components form a [`SENSITIVE_PAIRS`]
+/// compound, or it is a `*_hash` identifier of a secret (e.g.
 /// `password_hash`) rather than a content hash.
 fn identifier_is_sensitive(token: &str) -> bool {
     if token.is_empty() {
@@ -397,6 +415,12 @@ fn identifier_is_sensitive(token: &str) -> bool {
         .filter(|w| !w.is_empty())
         .collect();
     if words.iter().any(|w| SENSITIVE_WORDS.contains(w)) {
+        return true;
+    }
+    if words
+        .windows(2)
+        .any(|pair| SENSITIVE_PAIRS.contains(&(pair[0], pair[1])))
+    {
         return true;
     }
     words.last() == Some(&"hash") && words.iter().any(|w| HASH_SECRET_PREFIXES.contains(w))
@@ -496,6 +520,41 @@ fn check(password_hash: &str, input_hash: &str) -> bool {
         let mut findings = Vec::new();
         detect_non_constant_time_comparison(Path::new("lib.rs"), &code, &mut findings);
         assert_eq!(findings.len(), 1, "{findings:?}");
+    }
+
+    #[test]
+    fn sensitive_compound_equality_is_flagged() {
+        let src = "\
+fn verify(auth_tag: &[u8], expected: &[u8], access_token: &str, presented: &str) -> bool {
+    auth_tag == expected && access_token == presented
+}
+";
+        let code = lines(src);
+        let mut findings = Vec::new();
+        detect_non_constant_time_comparison(Path::new("lib.rs"), &code, &mut findings);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].line_start, 2);
+    }
+
+    #[test]
+    fn generic_tag_and_token_words_are_clean() {
+        // The corpus false-positive shapes that forced the narrow word list:
+        // serde's enum tag, nom/mio-style parser/event tokens, and DNSSEC's
+        // public key_tag / sig_input record metadata.
+        let src = "\
+fn check(field: &str, tag: &str, i: Input, token: Input, rrsig: &Rrsig, ksk_tag: u16) -> bool {
+    field == tag
+        || i == token
+        || rrsig.key_tag == ksk_tag
+        || sig_input.type_covered == key.record_type
+        || mac_addr == other.mac_addr
+        || session.id == current
+}
+";
+        let code = lines(src);
+        let mut findings = Vec::new();
+        detect_non_constant_time_comparison(Path::new("lib.rs"), &code, &mut findings);
+        assert!(findings.is_empty(), "{findings:?}");
     }
 
     #[test]

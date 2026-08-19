@@ -21,7 +21,7 @@
         "UnsafeUsage": 130
       },
       "group": "rust",
-      "score_overall": 83,
+      "score_overall": 94,
       "sha": "7dd7b5b09e06ca58daadfb12bd45a9aa8fa716f2",
       "total_findings": 532,
       "url": "https://github.com/alacritty/alacritty.git"
@@ -45,7 +45,7 @@
         "UnpinnedImage": 1
       },
       "group": "rust",
-      "score_overall": 82,
+      "score_overall": 89,
       "sha": "b671e53c2cd0177beb357cf6cb997ee4215c7155",
       "total_findings": 112,
       "url": "https://github.com/sharkdp/bat.git"
@@ -61,7 +61,7 @@
         "TooManyParams": 8
       },
       "group": "web",
-      "score_overall": 86,
+      "score_overall": 84,
       "sha": "45ba3278b5822f6fa6107a44ca41669b6e722482",
       "total_findings": 808,
       "url": "https://github.com/caddyserver/caddy.git"
@@ -84,7 +84,7 @@
         "UnsafeUsage": 7
       },
       "group": "rust",
-      "score_overall": 83,
+      "score_overall": 93,
       "sha": "5b81f1012da19f1474decfe7ffcfb437f59ccba4",
       "total_findings": 608,
       "url": "https://github.com/clap-rs/clap.git"
@@ -97,7 +97,7 @@
         "NamingInconsistency": 1
       },
       "group": "web",
-      "score_overall": 98,
+      "score_overall": 95,
       "sha": "a3714473feb3d2908add734d340e7755fd85e0a3",
       "total_findings": 19,
       "url": "https://github.com/expressjs/express.git"
@@ -114,7 +114,7 @@
         "TooManyParams": 2
       },
       "group": "web",
-      "score_overall": 83,
+      "score_overall": 92,
       "sha": "dbebe73c421597da96c3154c1036377f4e8e5117",
       "total_findings": 180,
       "url": "https://github.com/fastify/fastify.git"
@@ -136,7 +136,7 @@
         "UnsafeUsage": 1
       },
       "group": "rust",
-      "score_overall": 88,
+      "score_overall": 95,
       "sha": "ee20f426ddf338ac7ead5c5f00ea49258005caaf",
       "total_findings": 56,
       "url": "https://github.com/sharkdp/fd.git"
@@ -152,7 +152,7 @@
         "TooManyParams": 3
       },
       "group": "web",
-      "score_overall": 87,
+      "score_overall": 94,
       "sha": "fec5891c18437669ade008e10bb82b8a3b7ed530",
       "total_findings": 565,
       "url": "https://github.com/gofiber/fiber.git"
@@ -167,7 +167,7 @@
         "RenamedDuplicate": 136
       },
       "group": "web",
-      "score_overall": 87,
+      "score_overall": 94,
       "sha": "dcaa4296d111981ffb31ac3eba90bb63e1eb5ab9",
       "total_findings": 157,
       "url": "https://github.com/gin-gonic/gin.git"
@@ -187,6 +187,7 @@
         "MissingHealthProbes": 1,
         "MissingSafetyComment": 8,
         "NamingInconsistency": 1,
+        "NonConstantTimeComparison": 1,
         "PanicRisk": 426,
         "RenamedDuplicate": 256,
         "RunningAsRoot": 1,
@@ -196,9 +197,9 @@
         "UnsafeUsage": 8
       },
       "group": "network",
-      "score_overall": 81,
+      "score_overall": 88,
       "sha": "ea0aa7bc5998f229da9d8ed6506bb79684d5c4b7",
-      "total_findings": 1443,
+      "total_findings": 1444,
       "url": "https://github.com/hickory-dns/hickory-dns.git"
     },
     "hyper": {
@@ -221,7 +222,7 @@
         "UnsafeUsage": 42
       },
       "group": "network",
-      "score_overall": 84,
+      "score_overall": 93,
       "sha": "8fcaf1a62787b824fdd7b95a3e7c9ea81acd3449",
       "total_findings": 349,
       "url": "https://github.com/hyperium/hyper.git"
@@ -236,6 +237,7 @@
         "LongFunction": 99,
         "MissingSafetyComment": 10,
         "NamingInconsistency": 3,
+        "NonConstantTimeComparison": 2,
         "PanicRisk": 165,
         "RenamedDuplicate": 121,
         "SemanticDuplicate": 25,
@@ -244,9 +246,9 @@
         "UnvalidatedLengthPrefix": 1
       },
       "group": "rust",
-      "score_overall": 83,
+      "score_overall": 90,
       "sha": "44ce9226c541dd2b11897b9ef07156a28871cdb7",
-      "total_findings": 550,
+      "total_findings": 552,
       "url": "https://github.com/image-rs/image.git"
     },
     "laravel": {
@@ -275,7 +277,7 @@
         "UnsafeUsage": 4
       },
       "group": "parsers",
-      "score_overall": 86,
+      "score_overall": 92,
       "sha": "51c3c4e44fa78a8a09b413419372b97b2cc2a787",
       "total_findings": 333,
       "url": "https://github.com/rust-bakery/nom.git"
@@ -297,7 +299,7 @@
         "UnsafeUsage": 1
       },
       "group": "parsers",
-      "score_overall": 85,
+      "score_overall": 95,
       "sha": "7828af23769ae679e9a6f2b8827e22b4b025119d",
       "total_findings": 184,
       "url": "https://github.com/pest-parser/pest.git"
@@ -315,6 +317,7 @@
         "LongFunction": 82,
         "MissingSafetyComment": 84,
         "NamingInconsistency": 1,
+        "NonConstantTimeComparison": 1,
         "PanicRisk": 154,
         "RenamedDuplicate": 78,
         "SemanticDuplicate": 13,
@@ -323,9 +326,9 @@
         "UnsafeUsage": 90
       },
       "group": "network",
-      "score_overall": 83,
+      "score_overall": 93,
       "sha": "35fe3379205ed2ace0e6a858f60f3a8a2ff6510e",
-      "total_findings": 645,
+      "total_findings": 646,
       "url": "https://github.com/quinn-rs/quinn.git"
     },
     "rayon": {
@@ -348,7 +351,7 @@
         "UnsafeUsage": 187
       },
       "group": "rust",
-      "score_overall": 84,
+      "score_overall": 96,
       "sha": "1f9bb2538e50f1e6d1bc2e3d06a361ba2af0b632",
       "total_findings": 629,
       "url": "https://github.com/rayon-rs/rayon.git"
@@ -372,7 +375,7 @@
         "UnsafeUsage": 5
       },
       "group": "rust",
-      "score_overall": 83,
+      "score_overall": 89,
       "sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
       "total_findings": 519,
       "url": "https://github.com/BurntSushi/ripgrep.git"
@@ -394,7 +397,7 @@
         "UnsafeUsage": 3
       },
       "group": "rust",
-      "score_overall": 84,
+      "score_overall": 95,
       "sha": "747814f7d5fbab872df3b02f070c165b91bde062",
       "total_findings": 228,
       "url": "https://github.com/serde-rs/serde.git"
@@ -410,7 +413,7 @@
         "TooManyParams": 6
       },
       "group": "web",
-      "score_overall": 88,
+      "score_overall": 93,
       "sha": "80900fb39cafce3ae53b18a2c4f642a122f03095",
       "total_findings": 85,
       "url": "https://github.com/slimphp/Slim.git"
@@ -434,7 +437,7 @@
         "UnsafeUsage": 916
       },
       "group": "rust",
-      "score_overall": 84,
+      "score_overall": 93,
       "sha": "625954f365727668cb02d04172b34f1149637728",
       "total_findings": 3012,
       "url": "https://github.com/tokio-rs/tokio.git"
@@ -463,7 +466,7 @@
         "UnsafeUsage": 557
       },
       "group": "parsers",
-      "score_overall": 81,
+      "score_overall": 83,
       "sha": "f235c2f1c39901dc23eb08f35040386250411078",
       "total_findings": 1921,
       "url": "https://github.com/tree-sitter/tree-sitter.git"
