@@ -47,26 +47,14 @@ pub fn parse_file(path: &Path) -> Result<Ir> {
     // the file - the walk couldn't see it yet.
     let pending = std::mem::take(&mut extractor.pending_impl_methods);
     if !pending.is_empty() {
-        let types: std::collections::HashMap<String, SymbolId> = extractor
-            .ir
-            .symbols
-            .iter()
-            .filter(|(_, s)| {
-                matches!(
-                    s.kind,
-                    SymbolKind::Class
-                        | SymbolKind::Enum
-                        | SymbolKind::Trait
-                        | SymbolKind::Interface
-                )
-            })
-            .map(|(id, s)| (s.name.clone(), *id))
-            .collect();
         for (method_id, type_name) in pending {
-            if let Some(parent_id) = types.get(&type_name) {
+            // `find_symbol_by_name` breaks same-name-in-different-modules
+            // ties deterministically (earliest declaration) instead of
+            // depending on HashMap iteration order - see its doc comment.
+            if let Some(parent_id) = extractor.find_symbol_by_name(&type_name) {
                 if let Some(sym) = extractor.ir.symbols.get_mut(&method_id) {
                     if sym.parent.is_none() {
-                        sym.parent = Some(*parent_id);
+                        sym.parent = Some(parent_id);
                     }
                 }
             }
@@ -157,6 +145,27 @@ impl RustExtractor {
 
     fn node_text<'a>(&'a self, node: tree_sitter::Node<'a>) -> &'a str {
         node.utf8_text(self.source.as_bytes()).unwrap_or("")
+    }
+
+    /// Find a symbol by bare name, deterministically. `ir.symbols` is a
+    /// HashMap, so picking the first match from its iteration order would
+    /// let a same-name collision (two types/functions sharing a bare name in
+    /// different modules) resolve to whichever symbol the process's random
+    /// hash seed happened to iterate first - stable within one run, but
+    /// different on the next. Break ties by earliest declaration (line, then
+    /// id, both content-derived) so the same source always resolves the same
+    /// symbol.
+    fn find_symbol_by_name(&self, name: &str) -> Option<SymbolId> {
+        self.ir
+            .symbols
+            .iter()
+            .filter(|(_, s)| s.name == name)
+            .min_by(|a, b| {
+                a.1.line_start
+                    .cmp(&b.1.line_start)
+                    .then(a.0 .0.cmp(&b.0 .0))
+            })
+            .map(|(id, _)| *id)
     }
 
     fn hash_node(&self, node: tree_sitter::Node) -> (u64, u64) {
@@ -514,12 +523,7 @@ impl RustExtractor {
             .child_by_field_name("trait")
             .map(|n| self.node_text(n).to_string());
 
-        let impl_target_id = self
-            .ir
-            .symbols
-            .iter()
-            .find(|(_, s)| s.name == type_name)
-            .map(|(id, _)| *id);
+        let impl_target_id = self.find_symbol_by_name(&type_name);
 
         let prev_impl = self.current_impl.take();
         let prev_impl_name = self.current_impl_name.clone();
@@ -1132,11 +1136,7 @@ impl RustExtractor {
     /// final path segment.
     fn resolve_symbol_by_name(&self, name: &str) -> Option<SymbolId> {
         let short = name.rsplit("::").next().unwrap_or(name);
-        self.ir
-            .symbols
-            .iter()
-            .find(|(_, s)| s.name == short)
-            .map(|(id, _)| *id)
+        self.find_symbol_by_name(short)
     }
 
     fn handle_call(&mut self, node: tree_sitter::Node) {
