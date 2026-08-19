@@ -1,0 +1,15 @@
+[package]
+name = "verum-arbiter"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+verum-nucleus = { path = "../verum-nucleus" }
+verum-faber = { path = "../verum-faber" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
