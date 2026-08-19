@@ -762,7 +762,7 @@ fn print_audit_results(result: &PrismResult) {
         .collect();
     if !chains.is_empty() {
         // Most exploitable first; show the top few, summarize the rest
-        chains.sort_by(|a, b| severity_rank(&b.severity).cmp(&severity_rank(&a.severity)));
+        chains.sort_by_key(|c| std::cmp::Reverse(severity_rank(&c.severity)));
         println!("  {}  Chains:       {} mapped", "⚠".yellow(), chains.len());
         for f in chains.iter().take(12) {
             println!(

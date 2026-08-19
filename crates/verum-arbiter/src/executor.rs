@@ -132,7 +132,7 @@ pub fn execute_decisions(
         };
         let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
         // Bottom-up so earlier insertions don't shift later line numbers.
-        inserts.sort_by(|a, b| b.0.cmp(&a.0));
+        inserts.sort_by_key(|i| std::cmp::Reverse(i.0));
         for (line_start, comment) in inserts {
             let idx = (line_start as usize).saturating_sub(1).min(lines.len());
             lines.insert(idx, comment.to_string());

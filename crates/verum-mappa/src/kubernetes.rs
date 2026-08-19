@@ -144,9 +144,8 @@ fn split_yaml_documents(source: &str) -> Vec<(u32, String)> {
     let mut docs = Vec::new();
     let mut current = String::new();
     let mut current_start: u32 = 1;
-    let mut line_num: u32 = 1;
 
-    for line in source.lines() {
+    for (line_num, line) in (1_u32..).zip(source.lines()) {
         if line.trim() == "---" {
             if !current.trim().is_empty() {
                 docs.push((current_start, current.clone()));
@@ -157,7 +156,6 @@ fn split_yaml_documents(source: &str) -> Vec<(u32, String)> {
             current.push_str(line);
             current.push('\n');
         }
-        line_num += 1;
     }
     if !current.trim().is_empty() {
         docs.push((current_start, current));

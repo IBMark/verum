@@ -671,7 +671,7 @@ fn render_text(data: &MapData, profile: &str) -> String {
     }
 
     let mut edges = data.module_edges.clone();
-    edges.sort_by(|a, b| b.2.cmp(&a.2));
+    edges.sort_by_key(|e| std::cmp::Reverse(e.2));
     let _ = writeln!(out, "\n  {} Heaviest module dependencies:", "->".cyan());
     for (a, b, w) in edges.iter().take(10) {
         let _ = writeln!(
