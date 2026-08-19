@@ -10,6 +10,7 @@ pub mod naming;
 pub mod performance;
 pub mod rbac;
 pub mod rust_insights;
+pub mod scan;
 pub mod scoring;
 pub mod security;
 pub mod taint;
@@ -254,14 +255,29 @@ impl Prism {
 
         findings.extend(prof!("security", security::analyse(ir, &standard.security)));
         findings.extend(prof!("crypto_hygiene", crypto_hygiene::analyse(ir)));
-        findings.extend(prof!("taint", taint::analyse(ir)));
+
+        // `taint`, `rust_insights` and `transport` are all line scanners over
+        // the same tree, and each derived the same two things per file: the
+        // file's lines, and the symbols declared in it. Do both once here - the
+        // read in parallel, the symbol lookup as a single index - so the passes
+        // share them instead of each re-reading the tree and rescanning every
+        // symbol per file.
+        let scan_ctx = prof!("scan_context", scan::ScanContext::build(ir));
+
+        findings.extend(prof!("taint", taint::analyse_with_context(ir, &scan_ctx).0));
         findings.extend(prof!("naming", naming::analyse(ir, &standard.naming)));
         findings.extend(prof!("complexity", complexity::analyse(ir, standard)));
         findings.extend(prof!("performance", performance::analyse(ir)));
 
         // Informational; excluded from scoring.
-        findings.extend(prof!("rust_insights", rust_insights::analyse(ir)));
-        findings.extend(prof!("transport", transport::analyse(ir)));
+        findings.extend(prof!(
+            "rust_insights",
+            rust_insights::analyse_with_context(ir, &scan_ctx)
+        ));
+        findings.extend(prof!(
+            "transport",
+            transport::analyse_with_context(ir, &scan_ctx)
+        ));
 
         findings.extend(prof!("rbac", rbac::analyse(ir)));
         // K8s/Docker/Terraform findings come pre-built from the atlas phase.

@@ -15,9 +15,9 @@
 //! All heuristic: high-signal string/structure matching over the IR's function
 //! spans, tuned to be quiet on healthy code.
 
-use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
+use crate::scan::ScanContext;
 use verum_nucleus::Severity;
 use verum_nucleus::{Finding, FindingKind, Ir, SymbolId, SymbolKind};
 
@@ -135,6 +135,14 @@ struct FnSpan {
 }
 
 pub fn analyse(ir: &Ir) -> Vec<Finding> {
+    analyse_with_context(ir, &ScanContext::index_only(ir))
+}
+
+/// As [`analyse`], but taking each file's lines and symbols from a context
+/// shared with the other line-scanning passes. Purely a performance split: the
+/// context reproduces what this pass used to derive per file, so the findings
+/// are identical either way.
+pub fn analyse_with_context(ir: &Ir, ctx: &ScanContext) -> Vec<Finding> {
     let mut findings = Vec::new();
 
     let mut files: Vec<PathBuf> = ir.files.keys().cloned().collect();
@@ -156,20 +164,19 @@ pub fn analyse(ir: &Ir) -> Vec<Finding> {
             continue;
         }
 
-        let Ok(raw) = std::fs::read(path) else {
+        let Some(lines) = ctx.lines(path) else {
             continue;
         };
-        let lines: Vec<String> = raw.lines().map(|l| l.unwrap_or_default()).collect();
 
-        let mut spans: Vec<FnSpan> = ir
-            .symbols
-            .values()
+        let mut spans: Vec<FnSpan> = ctx
+            .symbols(path)
+            .iter()
+            .filter_map(|id| ir.symbols.get(id))
             .filter(|s| {
-                &s.file == path
-                    && matches!(
-                        s.kind,
-                        SymbolKind::Function | SymbolKind::Method | SymbolKind::StaticMethod
-                    )
+                matches!(
+                    s.kind,
+                    SymbolKind::Function | SymbolKind::Method | SymbolKind::StaticMethod
+                )
             })
             .map(|s| FnSpan {
                 id: s.id,
