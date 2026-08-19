@@ -1,6 +1,7 @@
 pub mod chains;
 pub mod complexity;
 pub mod crate_semantics;
+pub mod crypto_hygiene;
 pub mod dead_code;
 pub mod deps;
 pub mod duplicates;
@@ -252,6 +253,7 @@ impl Prism {
         findings.extend(dup_findings);
 
         findings.extend(prof!("security", security::analyse(ir, &standard.security)));
+        findings.extend(prof!("crypto_hygiene", crypto_hygiene::analyse(ir)));
         findings.extend(prof!("taint", taint::analyse(ir)));
         findings.extend(prof!("naming", naming::analyse(ir, &standard.naming)));
         findings.extend(prof!("complexity", complexity::analyse(ir, standard)));

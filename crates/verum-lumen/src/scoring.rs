@@ -26,7 +26,9 @@ pub fn compute(ir: &Ir, findings: &[Finding]) -> Score {
             | FindingKind::EvalUsage
             | FindingKind::WeakRandom
             | FindingKind::PathTraversal
-            | FindingKind::OpenRedirect => {
+            | FindingKind::OpenRedirect
+            | FindingKind::NonConstantTimeComparison
+            | FindingKind::StaticAeadNonce => {
                 let penalty = match &f.severity {
                     Severity::Critical => 15,
                     Severity::High => 5,
