@@ -1,5 +1,45 @@
 use verum_nucleus::{Finding, FindingKind, Ir, Score, Severity};
 
+/// Density at which a size-sensitive penalty reaches its maximum: findings of
+/// that class touching 10% of the codebase's symbols is already a pervasive,
+/// structural problem, so nothing is gained by letting the count run further.
+const SATURATION_DENSITY: f32 = 0.10;
+
+/// Floor on the denominator used for density.
+///
+/// Two jobs. It stops a handful of symbols from producing an absurd density
+/// (one duplicate in a five-symbol crate is not a 20%-duplicated codebase),
+/// and it keeps the small-repo end of the scale where it has always been:
+/// at exactly this many symbols the density curve reproduces the old
+/// per-finding penalties almost exactly (complexity 5/finding, duplicates
+/// 3/finding), so tiny messy repos are not quietly forgiven. Normalization
+/// only starts to bite above this size - which is the case it exists for.
+const MIN_SIZE_BASIS: usize = 100;
+
+/// Turn a raw finding count into a penalty proportional to its DENSITY over
+/// the codebase, rather than to the count itself.
+///
+/// Architecture, naming, complexity and duplicate penalties used to be
+/// `count * weight`, clamped at a maximum. Because the maxima were reached
+/// after a handful of findings, every real codebase pinned every one of those
+/// dimensions to its floor: a 500-symbol crate and a 45,000-symbol workspace
+/// both scored the same 50/100 on complexity, so the number carried no
+/// information and large repos were punished purely for being large. Scoring
+/// the ratio instead means the headline answers "what fraction of this code is
+/// affected?", which is comparable across codebase sizes.
+///
+/// Deterministic: pure integer inputs through fixed f32 arithmetic, no
+/// iteration order or environment involved.
+fn density_penalty(count: usize, symbols: usize, max_penalty: u8) -> u8 {
+    let basis = symbols.max(MIN_SIZE_BASIS) as f32;
+    let density = count as f32 / basis;
+    let scaled = (density / SATURATION_DENSITY) * max_penalty as f32;
+    // Round rather than truncate: truncation turns the binary representation
+    // of a clean ratio (2.9999998) into a penalty one point below the exact
+    // arithmetic, which is the sort of drift that makes a score look arbitrary.
+    scaled.min(max_penalty as f32).round() as u8
+}
+
 /// Turn findings into per-dimension scores and a capped overall.
 pub fn compute(ir: &Ir, findings: &[Finding]) -> Score {
     let mut score = Score {
@@ -47,8 +87,11 @@ pub fn compute(ir: &Ir, findings: &[Finding]) -> Score {
         }
     }
 
-    // Architecture penalty scales with the dead-code ratio.
-    let total_symbols = ir.symbol_count().max(1);
+    // Everything below is size-normalized: penalties track the DENSITY of the
+    // finding class over the codebase, not the raw count. See
+    // `density_penalty`. The maxima (50 dead code, 30 duplicates, 40 naming,
+    // 50 complexity) are unchanged - only the input to them is.
+    let total_symbols = ir.symbol_count();
     let dead_count = findings
         .iter()
         .filter(|f| {
@@ -58,8 +101,7 @@ pub fn compute(ir: &Ir, findings: &[Finding]) -> Score {
             )
         })
         .count();
-    let dead_ratio = dead_count as f32 / total_symbols as f32;
-    let arch_penalty = (dead_ratio * 50.0).min(50.0) as u8;
+    let arch_penalty = density_penalty(dead_count, total_symbols, 50);
     score.architecture = score.architecture.saturating_sub(arch_penalty);
 
     let dup_count = findings
@@ -73,9 +115,7 @@ pub fn compute(ir: &Ir, findings: &[Finding]) -> Score {
             )
         })
         .count();
-    // Compute in usize first - casting the count to u8 before clamping would
-    // wrap mod 256 and let large codebases score better than small ones.
-    let dup_penalty = (dup_count * 5).min(30) as u8;
+    let dup_penalty = density_penalty(dup_count, total_symbols, 30);
     score.architecture = score.architecture.saturating_sub(dup_penalty);
 
     let naming_count = findings
@@ -87,7 +127,7 @@ pub fn compute(ir: &Ir, findings: &[Finding]) -> Score {
             )
         })
         .count();
-    let naming_penalty = (naming_count * 2).min(40) as u8;
+    let naming_penalty = density_penalty(naming_count, total_symbols, 40);
     score.naming = score.naming.saturating_sub(naming_penalty);
 
     let complexity_count = findings
@@ -102,7 +142,7 @@ pub fn compute(ir: &Ir, findings: &[Finding]) -> Score {
             )
         })
         .count();
-    let complexity_penalty = (complexity_count * 5).min(50) as u8;
+    let complexity_penalty = density_penalty(complexity_count, total_symbols, 50);
     score.complexity = score.complexity.saturating_sub(complexity_penalty);
 
     for f in findings {
@@ -336,5 +376,85 @@ mod tests {
         let ir = ir_with_symbols(50);
         let score = compute(&ir, &[]);
         assert_eq!(score.overall, 100);
+    }
+
+    fn repeat(kind: FindingKind, severity: Severity, n: usize) -> Vec<Finding> {
+        (0..n)
+            .map(|_| finding(kind.clone(), severity.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn same_finding_count_hurts_a_small_codebase_more_than_a_large_one() {
+        // The regression this normalization exists for: 40 long functions is a
+        // pervasive problem in a 400-symbol crate and a rounding error in a
+        // 40,000-symbol workspace. Under the old count-based penalty both
+        // pinned complexity to its 50 floor.
+        let findings = repeat(FindingKind::LongFunction, Severity::Medium, 40);
+        let small = compute(&ir_with_symbols(400), &findings);
+        let large = compute(&ir_with_symbols(40_000), &findings);
+        assert!(
+            large.complexity > small.complexity,
+            "density should favour the larger codebase: small {} large {}",
+            small.complexity,
+            large.complexity
+        );
+        assert_eq!(small.complexity, 50, "10% density is the saturation point");
+        assert!(
+            large.complexity >= 99,
+            "0.1% density is noise, got {}",
+            large.complexity
+        );
+    }
+
+    #[test]
+    fn equal_density_scores_equally_regardless_of_size() {
+        // The property that makes scores comparable across repos: the headline
+        // measures the fraction of the codebase affected, not its size.
+        let small = compute(
+            &ir_with_symbols(1_000),
+            &repeat(FindingKind::HighComplexity, Severity::Medium, 20),
+        );
+        let large = compute(
+            &ir_with_symbols(10_000),
+            &repeat(FindingKind::HighComplexity, Severity::Medium, 200),
+        );
+        assert_eq!(small.complexity, large.complexity);
+        assert_eq!(small.overall, large.overall);
+    }
+
+    #[test]
+    fn dense_small_codebase_is_still_punished() {
+        // Normalization must not become an amnesty for genuinely messy small
+        // repos: a 200-symbol crate where a fifth of the symbols are overlong,
+        // a tenth are duplicated and a tenth are misnamed still bottoms out
+        // every size-sensitive dimension.
+        let mut findings = repeat(FindingKind::LongFunction, Severity::Medium, 40);
+        findings.extend(repeat(FindingKind::ExactDuplicate, Severity::Low, 20));
+        findings.extend(repeat(FindingKind::ConventionViolation, Severity::Low, 20));
+        let score = compute(&ir_with_symbols(200), &findings);
+        assert_eq!(score.complexity, 50);
+        assert_eq!(score.naming, 60);
+        assert_eq!(score.architecture, 70);
+    }
+
+    #[test]
+    fn tiny_codebases_use_the_size_floor() {
+        // A single duplicate in a five-symbol crate is not a 20%-duplicated
+        // codebase. The denominator floor keeps the penalty proportionate.
+        let findings = repeat(FindingKind::ExactDuplicate, Severity::Low, 1);
+        let tiny = compute(&ir_with_symbols(5), &findings);
+        let floored = compute(&ir_with_symbols(MIN_SIZE_BASIS), &findings);
+        assert_eq!(tiny.architecture, floored.architecture);
+        assert_eq!(tiny.architecture, 97);
+    }
+
+    #[test]
+    fn density_penalty_never_exceeds_its_maximum() {
+        // Guards the old `(count * 5) as u8` wraparound class of bug: however
+        // many findings arrive, the penalty stays inside its dimension budget.
+        assert_eq!(density_penalty(usize::MAX, 1, 30), 30);
+        assert_eq!(density_penalty(1_000_000, 10, 50), 50);
+        assert_eq!(density_penalty(0, 10_000, 50), 0);
     }
 }
