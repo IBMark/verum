@@ -1,0 +1,12 @@
+[package]
+name = "verum-nucleus"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+petgraph = { workspace = true }
+ahash = { workspace = true }
