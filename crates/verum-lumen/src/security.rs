@@ -104,6 +104,28 @@ fn quoted_value_is_status_word(line: &str) -> bool {
 /// (permission ability, config/route key, enum value) rather than a credential:
 /// all-lowercase, only `[a-z0-9._-]`, and carries a separator - low entropy, no
 /// mixed case or symbols.
+/// A quoted value carrying interpolation or format placeholders (`{name}`,
+/// `${x}`, `%s`, `<...>`) is a template that produces a secret at runtime, or an
+/// editor tokenizer pattern - not a hardcoded credential.
+fn quoted_value_is_template(line: &str) -> bool {
+    let after = match line.find(['=', ':']) {
+        Some(i) => &line[i + 1..],
+        None => return false,
+    };
+    let value = match after.find(['\'', '"']) {
+        Some(start) => {
+            let quote = after.as_bytes()[start] as char;
+            let rest = &after[start + 1..];
+            match rest.find(quote) {
+                Some(end) => &rest[..end],
+                None => return false,
+            }
+        }
+        None => return false,
+    };
+    value.contains('{') || value.contains('$') || value.contains('%') || value.contains('<')
+}
+
 fn quoted_value_is_identifier_like(line: &str) -> bool {
     let after_eq = match line.split_once('=') {
         Some((_, rhs)) => rhs,
@@ -466,6 +488,13 @@ pub fn analyse(ir: &Ir, config: &SecurityConfig) -> Vec<Finding> {
                 // Status/label strings that match the key pattern but report
                 // state rather than a value - `jwt_secret = "configured"`.
                 if quoted_value_is_status_word(&line) {
+                    continue;
+                }
+
+                // Templates / interpolated values (`ADMIN_TOKEN='{hash}'`,
+                // `"${x}"`, `%s`) emit a secret at runtime or are editor
+                // tokenizer patterns, not literal credentials.
+                if quoted_value_is_template(&line) {
                     continue;
                 }
 

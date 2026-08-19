@@ -62,6 +62,12 @@ pub fn is_auxiliary_path(path: &str) -> bool {
         "third_party",
         "third-party",
         "external",
+        // Web-served assets: overwhelmingly bundled/vendored JS/CSS, not
+        // first-party source you would fix a finding in.
+        "public",
+        "static",
+        "assets",
+        "plugins",
     ];
     if path
         .split(['/', '\\'])
