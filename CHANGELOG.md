@@ -4,6 +4,28 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-08-19
+
+### Fixed
+False positives found by running the analyzer across ~90 real-world repositories:
+- Taint: drop parameterized ORM/driver methods (`->query`, `.execute`, `db.query`)
+  from the SQL sink list, skip interprocedural flows through ambiguously-named
+  callees (a `sort()`/`count()` name-collision was reporting SQLi/path-traversal),
+  and remove Express `res.send`/`res.write` from the XSS sinks.
+- Length-prefix: recognize validation helpers and macros (`ensure_size!`,
+  `validate_*`, `verify_*`, `require_*`, `assert!`, `bail!`) as bound checks, and
+  treat counts read as 16 bits or fewer as bounded rather than unbounded
+  allocations. IronRDP dropped from 20 findings to 2.
+- Hardcoded secrets: treat web-asset directories (`public/`, `static/`, `assets/`,
+  `plugins/`) and vendored code as auxiliary, and skip templated/interpolated
+  values (`ADMIN_TOKEN='{hash}'`).
+- Findings in a project's own test/fixture corpus are auxiliary again (the
+  `fixtures` carve-out is scoped to Verum's own suite).
+- `BlockingInAsync` no longer flags tokio's async `.lock().await`.
+
+### Added
+- `VERUM_PROFILE` environment variable prints per-pass timing to stderr.
+
 ## [0.1.3] - 2026-08-19
 
 ### Added
@@ -45,6 +67,7 @@ All notable changes to this project are documented here. The format is based on
   dependency audit, and infrastructure checks.
 - Three surfaces: the `verum` CLI, a library facade, and an MCP server.
 
+[0.1.4]: https://github.com/IBMark/verum/releases/tag/v0.1.4
 [0.1.3]: https://github.com/IBMark/verum/releases/tag/v0.1.3
 [0.1.2]: https://github.com/IBMark/verum/releases/tag/v0.1.2
 [0.1.1]: https://github.com/IBMark/verum/releases/tag/v0.1.1
