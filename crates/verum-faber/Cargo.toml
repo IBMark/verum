@@ -1,12 +1,19 @@
 [package]
 name = "verum-faber"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Deterministic fix planner for Verum findings (report-only)."
 
 [dependencies]
-verum-nucleus = { path = "../verum-nucleus" }
-verum-mappa = { path = "../verum-mappa" }
-verum-lumen = { path = "../verum-lumen" }
+verum-nucleus = { workspace = true }
+verum-mappa = { workspace = true }
+verum-lumen = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }

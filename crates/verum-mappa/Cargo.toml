@@ -1,10 +1,17 @@
 [package]
 name = "verum-mappa"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Multi-language source parsers that build Verum's intermediate representation."
 
 [dependencies]
-verum-nucleus = { path = "../verum-nucleus" }
+verum-nucleus = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }

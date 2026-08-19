@@ -16,8 +16,16 @@ license = "MIT OR Apache-2.0"
 authors = ["Internet Backbone Ltd <verum@ibh.group>"]
 repository = "https://github.com/IBMark/verum"
 description = "Deterministic, whole-program, multi-language code analysis"
+readme = "README.md"
+keywords = ["static-analysis", "linter", "code-analysis", "security", "cli"]
+categories = ["development-tools", "command-line-utilities"]
 
 [workspace.dependencies]
+verum-nucleus = { path = "crates/verum-nucleus", version = "0.1.0" }
+verum-mappa = { path = "crates/verum-mappa", version = "0.1.0" }
+verum-lumen = { path = "crates/verum-lumen", version = "0.1.0" }
+verum-faber = { path = "crates/verum-faber", version = "0.1.0" }
+verum-arbiter = { path = "crates/verum-arbiter", version = "0.1.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"

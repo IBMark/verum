@@ -1,18 +1,25 @@
 [package]
 name = "verum"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Deterministic, whole-program, multi-language code analyzer (CLI and library)."
 
 [[bin]]
 name = "verum"
 path = "src/main.rs"
 
 [dependencies]
-verum-nucleus = { path = "../verum-nucleus" }
-verum-mappa = { path = "../verum-mappa" }
-verum-lumen = { path = "../verum-lumen" }
-verum-faber = { path = "../verum-faber" }
-verum-arbiter = { path = "../verum-arbiter" }
+verum-nucleus = { workspace = true }
+verum-mappa = { workspace = true }
+verum-lumen = { workspace = true }
+verum-faber = { workspace = true }
+verum-arbiter = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
