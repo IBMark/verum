@@ -268,6 +268,11 @@ impl Prism {
         findings
             .sort_by(|a, b| (&a.file, a.line_start, &a.id).cmp(&(&b.file, b.line_start, &b.id)));
 
+        // Two passes can flag the same issue at the same spot (e.g. `eval()` via
+        // both the pattern scan and taint). Collapse to one per kind+location.
+        let mut seen = HashSet::new();
+        findings.retain(|f| seen.insert((format!("{:?}", f.kind), f.file.clone(), f.line_start)));
+
         let score = scoring::compute(ir, &findings);
 
         let mut auto_fixable = Vec::new();
