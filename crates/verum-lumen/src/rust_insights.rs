@@ -406,22 +406,10 @@ pub fn analyse(ir: &Ir) -> Vec<Finding> {
                          thread, or an async equivalent",
                     ));
                 }
-                // Holding a std (blocking) Mutex across await points is the
-                // subtler variant.
-                if code.contains(".lock().unwrap()") || code.contains(".lock().await") {
-                    findings.push(mk(
-                        FindingKind::BlockingInAsync,
-                        Severity::Low,
-                        0.5,
-                        path,
-                        line_num,
-                        sym,
-                        "mutex lock inside async fn".to_string(),
-                        "latency/determinism: if the guard is held across an `.await` \
-                         the executor can stall or deadlock; prefer tokio::sync::Mutex \
-                         or drop the guard before awaiting",
-                    ));
-                }
+                // A std Mutex held across `.await` is the subtler hazard, but the
+                // dedicated `LockAcrossAwait` pass handles it precisely (and, unlike
+                // this crude presence check, does not flag tokio's async
+                // `.lock().await`, which is the correct pattern).
             }
 
             if in_hot {
