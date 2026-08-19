@@ -23,22 +23,7 @@ plus Kubernetes YAML, Dockerfiles, and Terraform.
 
 ## Example
 
-```
-$ verum audit tests/fixtures/php_security
-
-  ✓  1 files, ~36 lines, ~6 symbols
-
-  ✓  Dead code:    5 findings (getUser, login, render, runScript, getSecret)
-  ✓  Duplicates:   0 groups
-  ✓  Security:     5 findings
-     ✗ CRITICAL: SqlInjection      vulnerable.php:8
-     ✗ CRITICAL: WeakCrypto        vulnerable.php:15
-     ✗ HIGH:     XssVulnerability  vulnerable.php:22
-     ✗ CRITICAL: EvalUsage         vulnerable.php:28
-     ✗ CRITICAL: HardcodedSecret   vulnerable.php:33
-
-  Score: 72/100
-```
+![verum audit on a vulnerable PHP fixture: dead code, security findings, and a score](assets/demo.gif)
 
 ## Install
 
