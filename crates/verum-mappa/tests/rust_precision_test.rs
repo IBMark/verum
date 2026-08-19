@@ -29,6 +29,17 @@ fn symbol<'a>(ir: &'a Ir, name: &str) -> &'a verum_nucleus::Symbol {
         .unwrap_or_else(|| panic!("symbol `{name}` not found"))
 }
 
+/// The fully-qualified name of `sym_name`'s parent symbol, if any. Each
+/// `parse()` call re-seeds `SymbolId`s from a fresh temp file path, so raw
+/// `SymbolId`s are not comparable across separate parses - the
+/// fully-qualified name is the stable, content-derived thing to compare.
+fn parent_fq(ir: &Ir, sym_name: &str) -> Option<String> {
+    let parent_id = symbol(ir, sym_name).parent?;
+    ir.symbols
+        .get(&parent_id)
+        .map(|s| s.fully_qualified.clone())
+}
+
 #[test]
 fn cfg_not_test_module_is_production_code() {
     let ir = parse(
@@ -143,6 +154,81 @@ pub struct Widget {
         symbol(&ir, "render").parent,
         Some(widget_id),
         "impl blocks above the type declaration must still find their parent"
+    );
+}
+
+#[test]
+fn impl_target_lookup_is_deterministic_under_name_collision() {
+    // Two modules each declare a type named `Config`. Resolving `impl
+    // Config` used to `.find()` a match directly off the symbol HashMap's
+    // iteration order, so which `Config` a method bound to - and therefore
+    // its method count - could flip between runs of the identical source,
+    // purely from the process's random hash seed. Run the parse many times:
+    // every run must bind `configure` to the same `Config`.
+    let source = r#"
+mod a {
+    pub struct Config {
+        pub x: i32,
+    }
+}
+
+mod b {
+    pub struct Config {
+        pub y: i32,
+    }
+
+    impl Config {
+        pub fn configure(&self) {}
+    }
+}
+"#;
+
+    let mut seen_parents: std::collections::HashSet<Option<String>> =
+        std::collections::HashSet::new();
+    for _ in 0..50 {
+        let ir = parse(source);
+        seen_parents.insert(parent_fq(&ir, "configure"));
+    }
+    assert_eq!(
+        seen_parents.len(),
+        1,
+        "impl-target resolution must pick the same `Config` on every run, not vary with HashMap iteration order (saw: {seen_parents:?})"
+    );
+}
+
+#[test]
+fn impl_before_type_declaration_is_deterministic_under_name_collision() {
+    // Same collision, but for the pending-impl-methods path: the impl block
+    // appears before either `Config` is declared, forcing forward-reference
+    // resolution once the whole file has been walked.
+    let source = r#"
+impl Config {
+    pub fn configure(&self) {}
+}
+
+mod a {
+    pub struct Config {
+        pub x: i32,
+    }
+}
+
+mod b {
+    pub struct Config {
+        pub y: i32,
+    }
+}
+"#;
+
+    let mut seen_parents: std::collections::HashSet<Option<String>> =
+        std::collections::HashSet::new();
+    for _ in 0..50 {
+        let ir = parse(source);
+        seen_parents.insert(parent_fq(&ir, "configure"));
+    }
+    assert_eq!(
+        seen_parents.len(),
+        1,
+        "forward-declared impl resolution must pick the same `Config` on every run, not vary with HashMap iteration order (saw: {seen_parents:?})"
     );
 }
 

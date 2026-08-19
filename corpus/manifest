@@ -1,0 +1,47 @@
+# Verum FP-regression corpus manifest.
+#
+# Each non-comment, non-blank line is one repository:
+#
+#   name  group  sha  url
+#
+# - name  : short identifier, used as the key in snapshot.json (must be unique)
+# - group : one of rust | web | parsers | network (loose language/domain tag,
+#           used only to group results in reports - it has no effect on the run)
+# - sha   : commit SHA the repo is pinned to. Findings are only comparable
+#           run-to-run if the input tree is byte-identical, so every entry
+#           MUST be pinned - never a branch name or tag that can move.
+# - url   : git remote to fetch the SHA from (must support fetching a
+#           specific commit, e.g. GitHub, GitLab; see corpus/run.py)
+#
+# To bump a pin: resolve the new SHA (e.g. `git ls-remote <url> <ref>`),
+# update the line below, then regenerate the baseline - see corpus/README.md.
+
+# --- rust ------------------------------------------------------------------
+ripgrep      rust     3fce3b5bb0236da2df6d99672afb8a719642eca7   https://github.com/BurntSushi/ripgrep.git
+alacritty    rust     7dd7b5b09e06ca58daadfb12bd45a9aa8fa716f2   https://github.com/alacritty/alacritty.git
+bat          rust     b671e53c2cd0177beb357cf6cb997ee4215c7155   https://github.com/sharkdp/bat.git
+fd           rust     ee20f426ddf338ac7ead5c5f00ea49258005caaf   https://github.com/sharkdp/fd.git
+tokio        rust     625954f365727668cb02d04172b34f1149637728   https://github.com/tokio-rs/tokio.git
+serde        rust     747814f7d5fbab872df3b02f070c165b91bde062   https://github.com/serde-rs/serde.git
+clap         rust     5b81f1012da19f1474decfe7ffcfb437f59ccba4   https://github.com/clap-rs/clap.git
+rayon        rust     1f9bb2538e50f1e6d1bc2e3d06a361ba2af0b632   https://github.com/rayon-rs/rayon.git
+image        rust     44ce9226c541dd2b11897b9ef07156a28871cdb7   https://github.com/image-rs/image.git
+
+# --- parsers -----------------------------------------------------------
+tree-sitter  parsers  f235c2f1c39901dc23eb08f35040386250411078   https://github.com/tree-sitter/tree-sitter.git
+nom          parsers  51c3c4e44fa78a8a09b413419372b97b2cc2a787   https://github.com/rust-bakery/nom.git
+pest         parsers  7828af23769ae679e9a6f2b8827e22b4b025119d   https://github.com/pest-parser/pest.git
+
+# --- network -----------------------------------------------------------
+hyper        network  8fcaf1a62787b824fdd7b95a3e7c9ea81acd3449   https://github.com/hyperium/hyper.git
+quinn        network  35fe3379205ed2ace0e6a858f60f3a8a2ff6510e   https://github.com/quinn-rs/quinn.git
+hickory-dns  network  ea0aa7bc5998f229da9d8ed6506bb79684d5c4b7   https://github.com/hickory-dns/hickory-dns.git
+
+# --- web ---------------------------------------------------------------
+express      web      a3714473feb3d2908add734d340e7755fd85e0a3   https://github.com/expressjs/express.git
+fastify      web      dbebe73c421597da96c3154c1036377f4e8e5117   https://github.com/fastify/fastify.git
+laravel      web      4a27aeaa890579f6b70e4bbd9d44c96056174119   https://github.com/laravel/laravel.git
+slim         web      80900fb39cafce3ae53b18a2c4f642a122f03095   https://github.com/slimphp/Slim.git
+gin          web      dcaa4296d111981ffb31ac3eba90bb63e1eb5ab9   https://github.com/gin-gonic/gin.git
+fiber        web      fec5891c18437669ade008e10bb82b8a3b7ed530   https://github.com/gofiber/fiber.git
+caddy        web      45ba3278b5822f6fa6107a44ca41669b6e722482   https://github.com/caddyserver/caddy.git

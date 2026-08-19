@@ -1,0 +1,472 @@
+{
+  "repos": {
+    "alacritty": {
+      "by_kind": {
+        "ConventionViolation": 24,
+        "CrateApiMisuse": 1,
+        "DeadFunction": 7,
+        "DuplicateDependency": 1,
+        "ExactDuplicate": 2,
+        "GodClass": 7,
+        "HotPathAllocation": 14,
+        "LockOnHotPath": 1,
+        "LongFunction": 83,
+        "MissingSafetyComment": 125,
+        "NamingInconsistency": 4,
+        "PanicRisk": 74,
+        "RenamedDuplicate": 43,
+        "SemanticDuplicate": 2,
+        "TooManyParams": 11,
+        "UnboundedChannel": 3,
+        "UnsafeUsage": 130
+      },
+      "group": "rust",
+      "score_overall": 83,
+      "sha": "7dd7b5b09e06ca58daadfb12bd45a9aa8fa716f2",
+      "total_findings": 532,
+      "url": "https://github.com/alacritty/alacritty.git"
+    },
+    "bat": {
+      "by_kind": {
+        "ConventionViolation": 8,
+        "DeadFunction": 3,
+        "DuplicateDependency": 1,
+        "GodClass": 1,
+        "HotPathAllocation": 1,
+        "LockOnHotPath": 3,
+        "LongFunction": 24,
+        "MissingHealthProbes": 2,
+        "NamingInconsistency": 2,
+        "PanicRisk": 35,
+        "RenamedDuplicate": 26,
+        "RunningAsRoot": 2,
+        "SemanticDuplicate": 1,
+        "TooManyParams": 2,
+        "UnpinnedImage": 1
+      },
+      "group": "rust",
+      "score_overall": 82,
+      "sha": "b671e53c2cd0177beb357cf6cb997ee4215c7155",
+      "total_findings": 112,
+      "url": "https://github.com/sharkdp/bat.git"
+    },
+    "caddy": {
+      "by_kind": {
+        "DeadFunction": 199,
+        "ExactDuplicate": 13,
+        "GodClass": 6,
+        "LongFunction": 223,
+        "NamingInconsistency": 4,
+        "RenamedDuplicate": 355,
+        "TooManyParams": 8
+      },
+      "group": "web",
+      "score_overall": 86,
+      "sha": "45ba3278b5822f6fa6107a44ca41669b6e722482",
+      "total_findings": 808,
+      "url": "https://github.com/caddyserver/caddy.git"
+    },
+    "clap": {
+      "by_kind": {
+        "ConventionViolation": 79,
+        "DeadFunction": 21,
+        "DuplicateDependency": 1,
+        "ExactDuplicate": 33,
+        "GodClass": 16,
+        "HotPathAllocation": 24,
+        "LongFunction": 71,
+        "MissingSafetyComment": 2,
+        "NamingInconsistency": 3,
+        "PanicRisk": 76,
+        "RenamedDuplicate": 247,
+        "SemanticDuplicate": 22,
+        "TooManyParams": 6,
+        "UnsafeUsage": 7
+      },
+      "group": "rust",
+      "score_overall": 83,
+      "sha": "5b81f1012da19f1474decfe7ffcfb437f59ccba4",
+      "total_findings": 608,
+      "url": "https://github.com/clap-rs/clap.git"
+    },
+    "express": {
+      "by_kind": {
+        "DangerousChain": 7,
+        "DeadFunction": 10,
+        "LongFunction": 1,
+        "NamingInconsistency": 1
+      },
+      "group": "web",
+      "score_overall": 98,
+      "sha": "a3714473feb3d2908add734d340e7755fd85e0a3",
+      "total_findings": 19,
+      "url": "https://github.com/expressjs/express.git"
+    },
+    "fastify": {
+      "by_kind": {
+        "ConventionViolation": 36,
+        "DangerousChain": 30,
+        "DeadFunction": 63,
+        "ExactDuplicate": 1,
+        "LongFunction": 28,
+        "NamingInconsistency": 3,
+        "RenamedDuplicate": 17,
+        "TooManyParams": 2
+      },
+      "group": "web",
+      "score_overall": 83,
+      "sha": "dbebe73c421597da96c3154c1036377f4e8e5117",
+      "total_findings": 180,
+      "url": "https://github.com/fastify/fastify.git"
+    },
+    "fd": {
+      "by_kind": {
+        "ConventionViolation": 6,
+        "DeadFunction": 7,
+        "DuplicateDependency": 1,
+        "ExactDuplicate": 1,
+        "HotPathAllocation": 6,
+        "LockOnHotPath": 2,
+        "LongFunction": 8,
+        "MissingSafetyComment": 1,
+        "NamingInconsistency": 1,
+        "PanicRisk": 18,
+        "RenamedDuplicate": 3,
+        "SemanticDuplicate": 1,
+        "UnsafeUsage": 1
+      },
+      "group": "rust",
+      "score_overall": 88,
+      "sha": "ee20f426ddf338ac7ead5c5f00ea49258005caaf",
+      "total_findings": 56,
+      "url": "https://github.com/sharkdp/fd.git"
+    },
+    "fiber": {
+      "by_kind": {
+        "DeadFunction": 46,
+        "ExactDuplicate": 9,
+        "GodClass": 12,
+        "LongFunction": 109,
+        "NamingInconsistency": 2,
+        "RenamedDuplicate": 384,
+        "TooManyParams": 3
+      },
+      "group": "web",
+      "score_overall": 87,
+      "sha": "fec5891c18437669ade008e10bb82b8a3b7ed530",
+      "total_findings": 565,
+      "url": "https://github.com/gofiber/fiber.git"
+    },
+    "gin": {
+      "by_kind": {
+        "DeadFunction": 4,
+        "ExactDuplicate": 1,
+        "GodClass": 3,
+        "LongFunction": 11,
+        "NamingInconsistency": 2,
+        "RenamedDuplicate": 136
+      },
+      "group": "web",
+      "score_overall": 87,
+      "sha": "dcaa4296d111981ffb31ac3eba90bb63e1eb5ab9",
+      "total_findings": 157,
+      "url": "https://github.com/gin-gonic/gin.git"
+    },
+    "hickory-dns": {
+      "by_kind": {
+        "BlockingInAsync": 1,
+        "ConventionViolation": 35,
+        "CrateApiMisuse": 1,
+        "DeadFunction": 23,
+        "DuplicateDependency": 1,
+        "ExactDuplicate": 68,
+        "GodClass": 11,
+        "HotPathAllocation": 238,
+        "LockOnHotPath": 9,
+        "LongFunction": 307,
+        "MissingHealthProbes": 1,
+        "MissingSafetyComment": 8,
+        "NamingInconsistency": 1,
+        "PanicRisk": 426,
+        "RenamedDuplicate": 256,
+        "RunningAsRoot": 1,
+        "SemanticDuplicate": 13,
+        "TooManyParams": 33,
+        "UnpinnedImage": 2,
+        "UnsafeUsage": 8
+      },
+      "group": "network",
+      "score_overall": 81,
+      "sha": "ea0aa7bc5998f229da9d8ed6506bb79684d5c4b7",
+      "total_findings": 1443,
+      "url": "https://github.com/hickory-dns/hickory-dns.git"
+    },
+    "hyper": {
+      "by_kind": {
+        "ConventionViolation": 43,
+        "CrateApiMisuse": 1,
+        "DeadFunction": 3,
+        "ExactDuplicate": 18,
+        "GodClass": 3,
+        "HotPathAllocation": 16,
+        "LockOnHotPath": 4,
+        "LongFunction": 38,
+        "MissingSafetyComment": 29,
+        "NamingInconsistency": 1,
+        "PanicRisk": 66,
+        "RenamedDuplicate": 77,
+        "SemanticDuplicate": 4,
+        "TooManyParams": 3,
+        "UnboundedChannel": 1,
+        "UnsafeUsage": 42
+      },
+      "group": "network",
+      "score_overall": 84,
+      "sha": "8fcaf1a62787b824fdd7b95a3e7c9ea81acd3449",
+      "total_findings": 349,
+      "url": "https://github.com/hyperium/hyper.git"
+    },
+    "image": {
+      "by_kind": {
+        "ConventionViolation": 31,
+        "DeadFunction": 7,
+        "ExactDuplicate": 13,
+        "GodClass": 3,
+        "HotPathAllocation": 47,
+        "LongFunction": 99,
+        "MissingSafetyComment": 10,
+        "NamingInconsistency": 3,
+        "PanicRisk": 165,
+        "RenamedDuplicate": 121,
+        "SemanticDuplicate": 25,
+        "TooManyParams": 14,
+        "UnsafeUsage": 11,
+        "UnvalidatedLengthPrefix": 1
+      },
+      "group": "rust",
+      "score_overall": 83,
+      "sha": "44ce9226c541dd2b11897b9ef07156a28871cdb7",
+      "total_findings": 550,
+      "url": "https://github.com/image-rs/image.git"
+    },
+    "laravel": {
+      "by_kind": {
+        "DeadFunction": 1,
+        "LongFunction": 10,
+        "MissingAuthMiddleware": 1
+      },
+      "group": "web",
+      "score_overall": 89,
+      "sha": "4a27aeaa890579f6b70e4bbd9d44c96056174119",
+      "total_findings": 12,
+      "url": "https://github.com/laravel/laravel.git"
+    },
+    "nom": {
+      "by_kind": {
+        "ConventionViolation": 8,
+        "DeadFunction": 16,
+        "ExactDuplicate": 48,
+        "HotPathAllocation": 59,
+        "LongFunction": 30,
+        "MissingSafetyComment": 4,
+        "PanicRisk": 18,
+        "RenamedDuplicate": 121,
+        "SemanticDuplicate": 25,
+        "UnsafeUsage": 4
+      },
+      "group": "parsers",
+      "score_overall": 86,
+      "sha": "51c3c4e44fa78a8a09b413419372b97b2cc2a787",
+      "total_findings": 333,
+      "url": "https://github.com/rust-bakery/nom.git"
+    },
+    "pest": {
+      "by_kind": {
+        "ConventionViolation": 12,
+        "ExactDuplicate": 5,
+        "GodClass": 4,
+        "HotPathAllocation": 5,
+        "LockOnHotPath": 1,
+        "LongFunction": 51,
+        "MissingSafetyComment": 1,
+        "NamingInconsistency": 2,
+        "PanicRisk": 82,
+        "RenamedDuplicate": 14,
+        "SemanticDuplicate": 5,
+        "TooManyParams": 1,
+        "UnsafeUsage": 1
+      },
+      "group": "parsers",
+      "score_overall": 85,
+      "sha": "7828af23769ae679e9a6f2b8827e22b4b025119d",
+      "total_findings": 184,
+      "url": "https://github.com/pest-parser/pest.git"
+    },
+    "quinn": {
+      "by_kind": {
+        "ConventionViolation": 21,
+        "CrateApiMisuse": 4,
+        "DeadFunction": 10,
+        "DuplicateDependency": 1,
+        "ExactDuplicate": 19,
+        "GodClass": 8,
+        "HotPathAllocation": 42,
+        "LockOnHotPath": 16,
+        "LongFunction": 82,
+        "MissingSafetyComment": 84,
+        "NamingInconsistency": 1,
+        "PanicRisk": 154,
+        "RenamedDuplicate": 78,
+        "SemanticDuplicate": 13,
+        "TooManyParams": 20,
+        "UnboundedChannel": 2,
+        "UnsafeUsage": 90
+      },
+      "group": "network",
+      "score_overall": 83,
+      "sha": "35fe3379205ed2ace0e6a858f60f3a8a2ff6510e",
+      "total_findings": 645,
+      "url": "https://github.com/quinn-rs/quinn.git"
+    },
+    "rayon": {
+      "by_kind": {
+        "ConventionViolation": 26,
+        "CrateApiMisuse": 11,
+        "DeadFunction": 18,
+        "ExactDuplicate": 19,
+        "GodClass": 1,
+        "HotPathAllocation": 3,
+        "LockOnHotPath": 2,
+        "LongFunction": 36,
+        "MissingSafetyComment": 158,
+        "NamingInconsistency": 2,
+        "PanicRisk": 72,
+        "RenamedDuplicate": 82,
+        "SemanticDuplicate": 8,
+        "TooManyParams": 1,
+        "UnboundedChannel": 3,
+        "UnsafeUsage": 187
+      },
+      "group": "rust",
+      "score_overall": 84,
+      "sha": "1f9bb2538e50f1e6d1bc2e3d06a361ba2af0b632",
+      "total_findings": 629,
+      "url": "https://github.com/rayon-rs/rayon.git"
+    },
+    "ripgrep": {
+      "by_kind": {
+        "ConventionViolation": 14,
+        "DeadFunction": 23,
+        "DuplicateDependency": 1,
+        "ExactDuplicate": 24,
+        "GodClass": 8,
+        "HotPathAllocation": 5,
+        "LongFunction": 73,
+        "MissingSafetyComment": 3,
+        "NamingInconsistency": 2,
+        "PanicRisk": 103,
+        "PathTraversal": 1,
+        "RenamedDuplicate": 252,
+        "SemanticDuplicate": 4,
+        "TooManyParams": 1,
+        "UnsafeUsage": 5
+      },
+      "group": "rust",
+      "score_overall": 83,
+      "sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "total_findings": 519,
+      "url": "https://github.com/BurntSushi/ripgrep.git"
+    },
+    "serde": {
+      "by_kind": {
+        "ConventionViolation": 16,
+        "DeadFunction": 6,
+        "ExactDuplicate": 27,
+        "GodClass": 8,
+        "HotPathAllocation": 2,
+        "LongFunction": 58,
+        "MissingSafetyComment": 2,
+        "NamingInconsistency": 1,
+        "PanicRisk": 30,
+        "RenamedDuplicate": 61,
+        "SemanticDuplicate": 9,
+        "TooManyParams": 5,
+        "UnsafeUsage": 3
+      },
+      "group": "rust",
+      "score_overall": 84,
+      "sha": "747814f7d5fbab872df3b02f070c165b91bde062",
+      "total_findings": 228,
+      "url": "https://github.com/serde-rs/serde.git"
+    },
+    "slim": {
+      "by_kind": {
+        "DeadFunction": 28,
+        "ExactDuplicate": 5,
+        "GodClass": 1,
+        "LongFunction": 2,
+        "NamingInconsistency": 2,
+        "RenamedDuplicate": 41,
+        "TooManyParams": 6
+      },
+      "group": "web",
+      "score_overall": 88,
+      "sha": "80900fb39cafce3ae53b18a2c4f642a122f03095",
+      "total_findings": 85,
+      "url": "https://github.com/slimphp/Slim.git"
+    },
+    "tokio": {
+      "by_kind": {
+        "BlockingInAsync": 17,
+        "ConventionViolation": 214,
+        "DeadFunction": 30,
+        "ExactDuplicate": 289,
+        "GodClass": 15,
+        "HotPathAllocation": 34,
+        "LockOnHotPath": 31,
+        "LongFunction": 96,
+        "MissingSafetyComment": 602,
+        "PanicRisk": 297,
+        "RenamedDuplicate": 411,
+        "SemanticDuplicate": 53,
+        "TooManyParams": 4,
+        "UnboundedChannel": 3,
+        "UnsafeUsage": 916
+      },
+      "group": "rust",
+      "score_overall": 84,
+      "sha": "625954f365727668cb02d04172b34f1149637728",
+      "total_findings": 3012,
+      "url": "https://github.com/tokio-rs/tokio.git"
+    },
+    "tree-sitter": {
+      "by_kind": {
+        "ConventionViolation": 45,
+        "CrateApiMisuse": 3,
+        "DangerousChain": 23,
+        "DeadFunction": 123,
+        "DuplicateDependency": 1,
+        "ExactDuplicate": 27,
+        "GodClass": 11,
+        "HotPathAllocation": 37,
+        "LongFunction": 202,
+        "MissingHealthProbes": 1,
+        "MissingSafetyComment": 538,
+        "NamingInconsistency": 3,
+        "PanicRisk": 162,
+        "RenamedDuplicate": 144,
+        "RunningAsRoot": 1,
+        "SemanticDuplicate": 4,
+        "TooManyParams": 35,
+        "UnboundedChannel": 2,
+        "UnpinnedImage": 2,
+        "UnsafeUsage": 557
+      },
+      "group": "parsers",
+      "score_overall": 81,
+      "sha": "f235c2f1c39901dc23eb08f35040386250411078",
+      "total_findings": 1921,
+      "url": "https://github.com/tree-sitter/tree-sitter.git"
+    }
+  }
+}
