@@ -4,6 +4,45 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-08-19
+
+### Changed
+- **Scores are recalibrated.** The size-sensitive penalties (dead code,
+  duplicates, naming, complexity) now measure issue *density* — each saturates
+  when its finding class touches 10% of the codebase's symbols — instead of raw
+  finding count, which pinned every repo beyond a few hundred symbols to the
+  same cap. Healthy large repos now score 88–96 (previously bunched at 83–85)
+  and very large codebases are no longer punished for their size alone. All
+  scores shift with this release; re-baseline any `verum gate` thresholds.
+
+### Added
+- Two Rust crypto-hygiene detectors: `NonConstantTimeComparison` (Medium) flags
+  `==`/`!=` on secret-bearing values (HMACs, signatures, secrets, digests, and
+  compounds like `auth_tag`/`access_token`) and suggests
+  `subtle::ConstantTimeEq`; `StaticAeadNonce` (High) flags a constant nonce/IV
+  literal reaching `.encrypt(`/`.seal(`/`Nonce::from_slice(`, staying quiet on
+  CSPRNG-filled nonces. Word choice is calibrated against the FP corpus: one
+  finding total across its 22 pinned repos.
+- An opt-in false-positive regression corpus (`corpus/`): 22 well-known repos
+  pinned to exact SHAs, a committed findings-by-kind baseline, and a `--diff`
+  mode that fails on any drift. Not part of default CI (it clones over the
+  network); see `corpus/README.md`.
+
+### Fixed
+- Two determinism bugs: Rust `impl` targets whose type name collides across
+  modules resolved by `HashMap` iteration order (hash-seed dependent, visible
+  as run-to-run drift in `verum map` and occasional `GodClass` count flips);
+  now broken deterministically by earliest declaration. Test temp dirs built
+  from the process id alone collided across parallel test threads — the source
+  of intermittent CI test failures — and are now unique per test.
+
+### Performance
+- The three line-scanning passes (taint, transport, rust_insights) share one
+  parallel whole-tree read and one per-file symbol index instead of each
+  re-scanning every symbol per file (the per-file lookup was quadratic).
+  Large-repo analysis drops accordingly: ruff 166s → 12.8s, laravel/framework
+  ~104s → ~13s. Findings are byte-identical.
+
 ## [0.1.4] - 2026-08-19
 
 ### Fixed
