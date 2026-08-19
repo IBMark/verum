@@ -88,17 +88,44 @@ fn is_bound_check(line: &str) -> bool {
     {
         return true;
     }
-    let conditional = [
-        "if ", "if(", "while ", "while(", "assert", "ensure", "&&", "||",
-    ]
-    .iter()
-    .any(|t| line.contains(t));
+    // Validation helpers and macros that check a value before it is used:
+    // `ensure_size!(...)`, `validate_remaining(...)`, `verify_len(...)`,
+    // `require_*`, `assert!`, `bail!`. These bound the value without a literal
+    // `<`/`>` on the line, so recognize them directly.
+    if ["ensure", "validate", "verify", "require", "assert", "bail!"]
+        .iter()
+        .any(|t| line.contains(t))
+    {
+        return true;
+    }
+    let conditional = ["if ", "if(", "while ", "while(", "&&", "||"]
+        .iter()
+        .any(|t| line.contains(t));
     if !conditional {
         return false;
     }
     let stripped = line.replace("->", "");
     stripped.contains('<') || stripped.contains('>')
 }
+
+/// Readers that yield an integer of 16 bits or fewer. Such a value is capped at
+/// 65535, so using it as an allocation size is not an *unbounded* risk (at most
+/// a small over-allocation) - the length-prefix detector skips these to avoid
+/// false positives on the many protocols whose counts are `u16`.
+const NARROW_PARSES: &[&str] = &[
+    "read_u16",
+    "read_u8",
+    "read_i16",
+    "read_i8",
+    "getUint16",
+    "getUint8",
+    "readUInt16",
+    "readUInt8",
+    "u16::from",
+    "u8::from",
+    "i16::from",
+    "i8::from",
+];
 
 struct FnSpan {
     id: SymbolId,
@@ -301,6 +328,10 @@ fn detect_unvalidated_length(path: &Path, code_lines: &[String], findings: &mut 
     let mut wire_vars: Vec<(String, u32)> = Vec::new();
     for (idx, line) in code_lines.iter().enumerate() {
         if !LEN_PARSES.iter().any(|p| line.contains(p)) {
+            continue;
+        }
+        // 16-bit-or-narrower reads are capped at 65535 - not unbounded.
+        if NARROW_PARSES.iter().any(|p| line.contains(p)) {
             continue;
         }
         if let Some(cap) = assign_re.captures(line) {
@@ -522,6 +553,41 @@ fn parse(buf: &[u8]) {
         let mut findings = Vec::new();
         detect_unvalidated_length(Path::new("lib.rs"), &code, &mut findings);
         assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn validation_helper_counts_as_bound() {
+        // A `validate_*` / `ensure_size!` guard bounds the value even without a
+        // literal `<`/`>` on the line (IronRDP / Akmot9 pattern).
+        let src = "\
+fn parse(cur: &mut Cursor) {
+    let frame_len = u32::from_be_bytes(cur.read4());
+    ensure_size!(in: cur, size: frame_len * 4);
+    let mut payload = Vec::with_capacity(frame_len as usize);
+}
+";
+        let code = lines(src);
+        let mut findings = Vec::new();
+        detect_unvalidated_length(Path::new("lib.rs"), &code, &mut findings);
+        assert!(
+            findings.is_empty(),
+            "validation helper should count as a bound"
+        );
+    }
+
+    #[test]
+    fn u16_count_is_not_flagged() {
+        // A count read as `u16` is capped at 65535 - not an unbounded allocation.
+        let src = "\
+fn parse(cur: &mut Cursor) {
+    let count = cur.read_u16() as usize;
+    let mut items = Vec::with_capacity(count);
+}
+";
+        let code = lines(src);
+        let mut findings = Vec::new();
+        detect_unvalidated_length(Path::new("lib.rs"), &code, &mut findings);
+        assert!(findings.is_empty(), "u16-bounded count must not be flagged");
     }
 
     #[test]
