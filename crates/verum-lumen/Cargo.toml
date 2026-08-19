@@ -1,0 +1,18 @@
+[package]
+name = "verum-lumen"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+verum-nucleus = { path = "../verum-nucleus" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+rayon = { workspace = true }
+ahash = { workspace = true }
+regex = { workspace = true }
+
+[dev-dependencies]
+verum-mappa = { path = "../verum-mappa" }
