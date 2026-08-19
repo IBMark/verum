@@ -224,50 +224,47 @@ impl Prism {
     ) -> Result<PrismResult> {
         let mut findings = Vec::new();
 
-        // Root-scoped: reads <root>/Cargo.lock.
-        if let Some(root) = root {
-            findings.extend(deps::analyse(root));
+        // Per-pass timing when VERUM_PROFILE is set in the environment.
+        let profile = std::env::var("VERUM_PROFILE").is_ok();
+        macro_rules! prof {
+            ($name:literal, $e:expr) => {{
+                let __t = std::time::Instant::now();
+                let __r = $e;
+                if profile {
+                    eprintln!("  pass {:<16} {:>7.2}s", $name, __t.elapsed().as_secs_f64());
+                }
+                __r
+            }};
         }
 
-        findings.extend(crate_semantics::analyse(ir, root));
+        // Root-scoped: reads <root>/Cargo.lock.
+        if let Some(root) = root {
+            findings.extend(prof!("deps", deps::analyse(root)));
+        }
 
-        let dead = dead_code::analyse(ir, &standard.dead_code);
-        findings.extend(dead);
+        findings.extend(prof!("crate_semantics", crate_semantics::analyse(ir, root)));
+        findings.extend(prof!(
+            "dead_code",
+            dead_code::analyse(ir, &standard.dead_code)
+        ));
 
-        let (dup_findings, dup_groups) = duplicates::analyse(ir);
+        let (dup_findings, dup_groups) = prof!("duplicates", duplicates::analyse(ir));
         findings.extend(dup_findings);
 
-        let sec = security::analyse(ir, &standard.security);
-        findings.extend(sec);
-
-        let taint = taint::analyse(ir);
-        findings.extend(taint);
-
-        let naming = naming::analyse(ir, &standard.naming);
-        findings.extend(naming);
-
-        let comp = complexity::analyse(ir, standard);
-        findings.extend(comp);
-
-        let perf = performance::analyse(ir);
-        findings.extend(perf);
+        findings.extend(prof!("security", security::analyse(ir, &standard.security)));
+        findings.extend(prof!("taint", taint::analyse(ir)));
+        findings.extend(prof!("naming", naming::analyse(ir, &standard.naming)));
+        findings.extend(prof!("complexity", complexity::analyse(ir, standard)));
+        findings.extend(prof!("performance", performance::analyse(ir)));
 
         // Informational; excluded from scoring.
-        let insights = rust_insights::analyse(ir);
-        findings.extend(insights);
+        findings.extend(prof!("rust_insights", rust_insights::analyse(ir)));
+        findings.extend(prof!("transport", transport::analyse(ir)));
 
-        let transport = transport::analyse(ir);
-        findings.extend(transport);
-
-        let rbac = rbac::analyse(ir);
-        findings.extend(rbac);
-
+        findings.extend(prof!("rbac", rbac::analyse(ir)));
         // K8s/Docker/Terraform findings come pre-built from the atlas phase.
-        let infra = infrastructure::analyse(ir);
-        findings.extend(infra);
-
-        let chain_findings = chains::analyse(ir);
-        findings.extend(chain_findings);
+        findings.extend(prof!("infrastructure", infrastructure::analyse(ir)));
+        findings.extend(prof!("chains", chains::analyse(ir)));
 
         // Drop source-hygiene and security findings that land in test, example,
         // vendored, or generated files - they are noise, not shipped-code
