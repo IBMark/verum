@@ -30,7 +30,11 @@ use verum_nucleus::{DuplicateGroup, Finding, FindingKind, Ir, Score};
 /// `fixtures` is deliberately *not* auxiliary: this project's own test suite
 /// points the analyzer at fixture trees as real targets.
 pub fn is_auxiliary_path(path: &str) -> bool {
-    if path.contains("fixtures") {
+    // Verum's own test suite points the analyzer at `tests/fixtures/` trees as
+    // deliberate targets. A real project's `test/fixtures/` or
+    // `resources/test/` of intentionally-broken code (e.g. a linter's test
+    // corpus) stays auxiliary via the segment check below.
+    if path.contains("tests/fixtures") {
         return false;
     }
     // Match on whole path segments so a leading or trailing `vendor/` counts the
@@ -55,6 +59,9 @@ pub fn is_auxiliary_path(path: &str) -> bool {
         "build",
         "target",
         "generated",
+        "third_party",
+        "third-party",
+        "external",
     ];
     if path
         .split(['/', '\\'])
