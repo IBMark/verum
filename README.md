@@ -1,6 +1,8 @@
 # Verum
 
 [![CI](https://github.com/IBMark/verum/actions/workflows/ci.yml/badge.svg)](https://github.com/IBMark/verum/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/verum.svg)](https://crates.io/crates/verum)
+[![docs.rs](https://img.shields.io/docsrs/verum)](https://docs.rs/verum)
 
 Verum is a deterministic, whole-program code analyzer. It maps a codebase into
 a single intermediate representation - symbols, call graph, routes, data flows -
@@ -17,13 +19,33 @@ and a fact layer that tools and agents can rely on.
 Supported languages: PHP, Rust, JavaScript, TypeScript, Python, Go, and Java,
 plus Kubernetes YAML, Dockerfiles, and Terraform.
 
+## Example
+
+```
+$ verum audit tests/fixtures/php_security
+
+  ✓  1 files, ~36 lines, ~6 symbols
+
+  ✓  Dead code:    5 findings (getUser, login, render, runScript, getSecret)
+  ✓  Duplicates:   0 groups
+  ✓  Security:     5 findings
+     ✗ CRITICAL: SqlInjection      vulnerable.php:8
+     ✗ CRITICAL: WeakCrypto        vulnerable.php:15
+     ✗ HIGH:     XssVulnerability  vulnerable.php:22
+     ✗ CRITICAL: EvalUsage         vulnerable.php:28
+     ✗ CRITICAL: HardcodedSecret   vulnerable.php:33
+
+  Score: 72/100
+```
+
 ## Install
 
 ```
-cargo install --path crates/verum
+cargo install verum
 ```
 
-This puts a `verum` binary on your PATH. To run against any Linux box without a
+This puts a `verum` binary on your PATH. To build from a checkout instead, use
+`cargo install --path crates/verum`. To run against any Linux box without a
 toolchain, build a static musl binary and copy it across:
 
 ```
