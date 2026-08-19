@@ -1,0 +1,25 @@
+[package]
+name = "verum-mappa"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+verum-nucleus = { path = "../verum-nucleus" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+rayon = { workspace = true }
+walkdir = { workspace = true }
+ahash = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-php = "0.22"
+tree-sitter-rust = "0.21"
+tree-sitter-javascript = "0.21"
+tree-sitter-java = "0.21"
+tree-sitter-typescript = "0.21"
+regex = { workspace = true }
+tree-sitter-python = "0.21"
+tree-sitter-go = "0.21"
+serde_yaml = { workspace = true }
