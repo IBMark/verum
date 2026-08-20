@@ -19,7 +19,6 @@ use std::time::Instant;
 
 use anyhow::Result;
 use rayon::prelude::*;
-use walkdir::WalkDir;
 
 use verum_nucleus::{FileId, FileInfo, Framework, Ir, Language, SymbolId};
 
@@ -204,7 +203,7 @@ impl Atlas {
         let profile = std::env::var("VERUM_PROFILE").is_ok();
         let mut mark = Instant::now();
 
-        let files = self.collect_files();
+        let (files, infra_files) = self.collect_all();
         tracing::info!("Collected {} files", files.len());
         mark = profile_phase(profile, "walk", mark);
 
@@ -226,7 +225,6 @@ impl Atlas {
         });
         mark = profile_phase(profile, "merge", mark);
 
-        let infra_files = self.collect_infra_files();
         if !infra_files.is_empty() {
             tracing::info!("Collected {} infrastructure files", infra_files.len());
             let infra_irs: Vec<Ir> = infra_files
@@ -279,14 +277,37 @@ impl Atlas {
         Ok(ir)
     }
 
-    fn collect_files(&self) -> Vec<PathBuf> {
+    /// Collect source and infrastructure files (K8s YAML, Dockerfiles,
+    /// Terraform) in one walk over the tree.
+    ///
+    /// The walk respects the repository's own `.gitignore` and
+    /// `.git/info/exclude` - a gitignored `venv/` or scratch directory is not
+    /// shipped code, and mapping it both costs time and floods findings.
+    /// Machine-dependent rules (the user's global gitignore, ignore files
+    /// above the root) are deliberately NOT applied: the same tree must map
+    /// identically on every machine. Both result lists are sorted, so the
+    /// downstream merge order never depends on directory readdir order.
+    fn collect_all(&self) -> (Vec<PathBuf>, Vec<PathBuf>) {
         let mut files = Vec::new();
+        let mut infra_files = Vec::new();
 
-        for entry in WalkDir::new(&self.config.root)
+        let walker = ignore::WalkBuilder::new(&self.config.root)
             .follow_links(false)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
+            // Keep dotfiles visible (`.eslintrc.js`, CI YAML under `.github/`
+            // were always mapped); only `.git` itself is pruned below.
+            .hidden(false)
+            .git_ignore(true)
+            .git_exclude(true)
+            // Machine state must not change findings.
+            .git_global(false)
+            .parents(false)
+            // `.ignore` files are tool-specific; only git's rules apply.
+            .ignore(false)
+            .require_git(true)
+            .filter_entry(|e| e.file_name() != ".git")
+            .build();
+
+        for entry in walker.filter_map(|e| e.ok()) {
             let path = entry.path();
 
             if !path.is_file() {
@@ -307,6 +328,52 @@ impl Atlas {
                 .iter()
                 .any(|pat| path_str.contains(pat.as_str()));
             if excluded {
+                continue;
+            }
+
+            // Size cap, checked on metadata BEFORE any read: hand-written
+            // source is essentially never this large, so anything bigger is
+            // generated output or data that would cost parse time for zero
+            // signal.
+            if entry
+                .metadata()
+                .map(|m| m.len() > MAX_SOURCE_FILE_BYTES)
+                .unwrap_or(false)
+            {
+                continue;
+            }
+
+            let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if file_name == "Dockerfile"
+                || file_name.ends_with(".dockerfile")
+                || file_name.starts_with("Dockerfile.")
+            {
+                infra_files.push(path.to_path_buf());
+                continue;
+            }
+
+            let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+                continue;
+            };
+
+            match ext {
+                "yaml" | "yml" => {
+                    // Only files that look like K8s manifests.
+                    if let Ok(content) = std::fs::read_to_string(path) {
+                        if content.contains("apiVersion:") && content.contains("kind:") {
+                            infra_files.push(path.to_path_buf());
+                        }
+                    }
+                    continue;
+                }
+                "tf" => {
+                    infra_files.push(path.to_path_buf());
+                    continue;
+                }
+                _ => {}
+            }
+
+            if language_for_extension(ext).is_none() {
                 continue;
             }
 
@@ -324,78 +391,18 @@ impl Atlas {
                 continue;
             }
 
-            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                if language_for_extension(ext).is_some() {
-                    files.push(path.to_path_buf());
-                }
+            // A NUL byte in the head of the file marks it as binary data
+            // wearing a source extension; parsing it yields garbage symbols.
+            if looks_binary(path) {
+                continue;
             }
+
+            files.push(path.to_path_buf());
         }
 
-        files
-    }
-
-    /// Collect infra files (K8s YAML, Dockerfiles, Terraform), regardless of
-    /// the primary language setting.
-    fn collect_infra_files(&self) -> Vec<PathBuf> {
-        let mut files = Vec::new();
-
-        for entry in WalkDir::new(&self.config.root)
-            .follow_links(false)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            let path = entry.path();
-
-            if !path.is_file() {
-                continue;
-            }
-
-            let path_str = path.to_string_lossy();
-            if path_str.contains("vendor/") || path_str.contains("node_modules/") {
-                continue;
-            }
-            if is_build_output(&path_str) {
-                continue;
-            }
-
-            let excluded = self
-                .config
-                .exclude_patterns
-                .iter()
-                .any(|pat| path_str.contains(pat.as_str()));
-            if excluded {
-                continue;
-            }
-
-            let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-
-            if file_name == "Dockerfile"
-                || file_name.ends_with(".dockerfile")
-                || file_name.starts_with("Dockerfile.")
-            {
-                files.push(path.to_path_buf());
-                continue;
-            }
-
-            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                match ext {
-                    "yaml" | "yml" => {
-                        // only files that look like K8s manifests
-                        if let Ok(content) = std::fs::read_to_string(path) {
-                            if content.contains("apiVersion:") && content.contains("kind:") {
-                                files.push(path.to_path_buf());
-                            }
-                        }
-                    }
-                    "tf" => {
-                        files.push(path.to_path_buf());
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        files
+        files.sort();
+        infra_files.sort();
+        (files, infra_files)
     }
 
     fn parse_infra_file(&self, path: &Path) -> Result<Ir> {
@@ -469,6 +476,27 @@ impl Atlas {
             }
         }
     }
+}
+
+/// Files larger than this are skipped before reading (see
+/// [`Atlas::collect_all`]). 5 MiB: no hand-written source file reaches this;
+/// generated bundles, test corpora and data files do.
+const MAX_SOURCE_FILE_BYTES: u64 = 5 * 1024 * 1024;
+
+/// True when the first 8 KiB contain a NUL byte - the standard cheap test for
+/// binary content (git uses the same heuristic). Read errors are not treated
+/// as binary; the parser will surface them.
+fn looks_binary(path: &Path) -> bool {
+    use std::io::Read;
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut buf = [0u8; 8192];
+    let mut head = file.take(buf.len() as u64);
+    let Ok(n) = head.read(&mut buf) else {
+        return false;
+    };
+    buf[..n].contains(&0)
 }
 
 /// Returns true for Blade template files (`*.blade.php`).
