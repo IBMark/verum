@@ -1,0 +1,116 @@
+[package]
+name = "verum-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+verum-nucleus = { path = "../crates/verum-nucleus" }
+verum-mappa = { path = "../crates/verum-mappa" }
+verum-lumen = { path = "../crates/verum-lumen", features = ["fuzzing"] }
+
+# Deliberately its own workspace: `fuzz/` must never be pulled into the root
+# workspace, or `cargo build --workspace` at the repo root would start building
+# libFuzzer and requiring nightly.
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "parse_rust"
+path = "fuzz_targets/parse_rust.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_python"
+path = "fuzz_targets/parse_python.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_javascript"
+path = "fuzz_targets/parse_javascript.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_typescript"
+path = "fuzz_targets/parse_typescript.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_go"
+path = "fuzz_targets/parse_go.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_java"
+path = "fuzz_targets/parse_java.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_php"
+path = "fuzz_targets/parse_php.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_dockerfile"
+path = "fuzz_targets/parse_dockerfile.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_terraform"
+path = "fuzz_targets/parse_terraform.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_kubernetes"
+path = "fuzz_targets/parse_kubernetes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_html"
+path = "fuzz_targets/parse_html.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lumen_line_passes"
+path = "fuzz_targets/lumen_line_passes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lumen_cfg_test_ranges"
+path = "fuzz_targets/lumen_cfg_test_ranges.rs"
+test = false
+doc = false
+bench = false

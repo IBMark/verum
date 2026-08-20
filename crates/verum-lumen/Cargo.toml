@@ -10,6 +10,13 @@ keywords.workspace = true
 categories.workspace = true
 description = "Deterministic code analyses (dead code, duplicates, taint, complexity) for Verum."
 
+[features]
+default = []
+# Exposes `fuzz_api`, the in-memory entry points used by the out-of-tree fuzz
+# targets in `fuzz/`. Off by default: nothing in a normal build, test run or
+# published crate depends on it.
+fuzzing = []
+
 [dependencies]
 verum-nucleus = { workspace = true }
 serde = { workspace = true }

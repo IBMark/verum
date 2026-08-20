@@ -1,0 +1,14 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: prod
+spec:
+  replicas: 2
+  template:
+    spec:
+      containers:
+        - name: web
+          image: ghcr.io/example/web:1.2.3
+          securityContext:
+            runAsNonRoot: true

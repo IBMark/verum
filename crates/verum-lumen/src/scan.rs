@@ -71,6 +71,18 @@ impl ScanContext {
         }
     }
 
+    /// Index the IR's symbols by file and take one file's lines from memory
+    /// instead of the filesystem.
+    ///
+    /// Only for the out-of-tree fuzz targets, which drive the line-scanning
+    /// passes over adversarial input without wanting a temp file per case.
+    #[cfg(feature = "fuzzing")]
+    pub fn with_lines(ir: &Ir, path: &Path, lines: Vec<String>) -> Self {
+        let mut ctx = Self::index_only(ir);
+        ctx.lines.insert(path.to_path_buf(), lines);
+        ctx
+    }
+
     /// The lines of `path`, borrowed when pre-read and read from disk when not.
     /// `None` means the file could not be read.
     pub fn lines(&self, path: &Path) -> Option<Cow<'_, [String]>> {

@@ -1,0 +1,2 @@
+#[cfg(test)]
+mod a { mod b { mod c { fn d() { if x { } } } } }

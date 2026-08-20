@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Pod
+x: &a
+  b: &b
+    c: *b
+metadata:
+  name: p
+spec: *a
