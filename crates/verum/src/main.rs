@@ -52,11 +52,24 @@ enum Commands {
     },
 
     /// Check deploy gate
-    Gate { path: PathBuf },
+    Gate {
+        path: PathBuf,
+        /// Compare against a previous `verum report --format json` output or
+        /// a `verum baseline` file: the gate then fails only on findings NOT
+        /// present in that baseline (matched by stable fingerprint), so a
+        /// legacy codebase can gate new work without first fixing history.
+        #[arg(long, value_name = "FILE")]
+        baseline: Option<PathBuf>,
+    },
 
     /// Snapshot current findings to verum.baseline.json so `gate` only fails
     /// on findings introduced afterwards (ratchet mode for existing codebases)
-    Baseline { path: PathBuf },
+    Baseline {
+        path: PathBuf,
+        /// Write the baseline somewhere other than <path>/verum.baseline.json
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
 
     /// Generate a report (markdown, json, sarif, or a self-contained html web UI)
     Report {
@@ -73,6 +86,12 @@ enum Commands {
         /// the static test-reachability estimate in the score.
         #[arg(long, value_name = "FILE")]
         coverage: Option<PathBuf>,
+        /// Partition findings against a previous `verum report --format json`
+        /// output or a `verum baseline` file: the report then carries a
+        /// `baseline` section listing new and resolved fingerprints and the
+        /// count of findings both runs share.
+        #[arg(long, value_name = "FILE")]
+        baseline: Option<PathBuf>,
     },
 
     /// Map the system: module & symbol graphs, data flows, cycles, routes
@@ -116,16 +135,23 @@ async fn main() -> Result<()> {
         Commands::Audit { path } => cmd_audit(&path).await.map(|_| true),
         Commands::Clean { path, dry_run } => cmd_clean(&path, dry_run).await.map(|_| true),
         Commands::Full { path, dry_run } => cmd_full(&path, dry_run).await,
-        Commands::Gate { path } => cmd_gate(&path).await,
-        Commands::Baseline { path } => cmd_baseline(&path).await.map(|_| true),
+        Commands::Gate { path, baseline } => cmd_gate(&path, baseline.as_deref()).await,
+        Commands::Baseline { path, out } => cmd_baseline(&path, out.as_deref()).await.map(|_| true),
         Commands::Report {
             path,
             format,
             out,
             coverage,
-        } => cmd_report(&path, &format, out.as_deref(), coverage.as_deref())
-            .await
-            .map(|_| true),
+            baseline,
+        } => cmd_report(
+            &path,
+            &format,
+            out.as_deref(),
+            coverage.as_deref(),
+            baseline.as_deref(),
+        )
+        .await
+        .map(|_| true),
         Commands::Map {
             path,
             format,
@@ -1256,7 +1282,7 @@ async fn cmd_full(path: &Path, _dry_run: bool) -> Result<bool> {
     Ok(gate_passed)
 }
 
-async fn cmd_gate(path: &Path) -> Result<bool> {
+async fn cmd_gate(path: &Path, baseline_file: Option<&Path>) -> Result<bool> {
     println!();
 
     let pb = make_spinner("Running audit for deploy gate...");
@@ -1269,6 +1295,64 @@ async fn cmd_gate(path: &Path) -> Result<bool> {
     print_audit_results(&result);
     println!();
 
+    // Explicit baseline: fail ONLY on findings the baseline does not know,
+    // judged by the gate's severity thresholds. Score thresholds do not apply
+    // here - a score cannot be attributed to the new findings alone, and the
+    // whole point of a baseline is that inherited debt does not gate.
+    if let Some(baseline_path) = baseline_file {
+        let baseline = load_fingerprint_baseline(baseline_path)?;
+        let diff = diff_against_baseline(&result.findings, &baseline);
+        println!(
+            "  {}  Baseline {}: {} existing waived, {} new, {} resolved",
+            "->".cyan(),
+            display_path(baseline_path),
+            diff.existing_count,
+            diff.new.len(),
+            diff.resolved.len(),
+        );
+        for f in &diff.new {
+            println!(
+                "     {} NEW {}: {} -- {}:{} [{}]",
+                "+".red(),
+                severity_label(&f.severity),
+                finding_kind_label(&f.kind),
+                display_path(&f.file),
+                f.line_start,
+                f.fingerprint,
+            );
+        }
+        let (_, _, max_critical) = gate_thresholds(path);
+        let new_critical = diff
+            .new
+            .iter()
+            .filter(|f| f.severity == Severity::Critical)
+            .count();
+        let new_high = diff
+            .new
+            .iter()
+            .filter(|f| f.severity == Severity::High)
+            .count();
+        let passed = new_critical <= max_critical && new_high == 0;
+        if passed {
+            println!(
+                "  {}  Deploy gate: {} (no new High/Critical findings vs baseline)",
+                "✓".green(),
+                "PASSED".green().bold()
+            );
+        } else {
+            println!("  {}  Deploy gate: {}", "✗".red(), "FAILED".red().bold());
+            println!(
+                "     {} {} new critical (max {}), {} new high vs baseline",
+                "->".red(),
+                new_critical,
+                max_critical,
+                new_high
+            );
+        }
+        println!();
+        return Ok(passed);
+    }
+
     // Ratchet mode: if a baseline exists, findings it already records don't
     // fail the gate - only newly-introduced ones do.
     let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
@@ -1277,7 +1361,7 @@ async fn cmd_gate(path: &Path) -> Result<bool> {
             .findings
             .iter()
             .filter(|f| is_baselineable(f))
-            .filter(|f| !baseline.contains(&finding_fingerprint(f, &canon)))
+            .filter(|f| !baseline.waives(f, &canon))
             .count();
         println!(
             "  {}  Baseline active: {} known finding(s) waived, {} new",
@@ -1289,13 +1373,13 @@ async fn cmd_gate(path: &Path) -> Result<bool> {
             .findings
             .iter()
             .filter(|f| is_baselineable(f) && f.severity == Severity::Critical)
-            .filter(|f| !baseline.contains(&finding_fingerprint(f, &canon)))
+            .filter(|f| !baseline.waives(f, &canon))
             .count();
         let new_high = result
             .findings
             .iter()
             .filter(|f| is_baselineable(f) && f.severity == Severity::High)
-            .filter(|f| !baseline.contains(&finding_fingerprint(f, &canon)))
+            .filter(|f| !baseline.waives(f, &canon))
             .count();
         let passed = new_critical == 0 && new_high == 0;
         if passed {
@@ -1335,11 +1419,12 @@ async fn cmd_gate(path: &Path) -> Result<bool> {
     Ok(passed)
 }
 
-fn check_deploy_gate(root: &Path, score: &Score, result: &PrismResult) -> (bool, Vec<String>) {
-    let mut reasons = Vec::new();
-
+/// The deploy-gate thresholds from `verum.standard.json`, with the documented
+/// defaults for a tree that has no config: (min overall 85, min security 90,
+/// max critical 0).
+fn gate_thresholds(root: &Path) -> (u8, u8, usize) {
     let standard_path = root.join("verum.standard.json");
-    let (min_overall, min_security, max_critical) = if standard_path.exists() {
+    if standard_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&standard_path) {
             if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
                 let overall = val
@@ -1354,16 +1439,17 @@ fn check_deploy_gate(root: &Path, score: &Score, result: &PrismResult) -> (bool,
                     .pointer("/deploy_gate/max_critical_issues")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0) as usize;
-                (overall, security, critical)
-            } else {
-                (85, 90, 0)
+                return (overall, security, critical);
             }
-        } else {
-            (85, 90, 0)
         }
-    } else {
-        (85, 90, 0)
-    };
+    }
+    (85, 90, 0)
+}
+
+fn check_deploy_gate(root: &Path, score: &Score, result: &PrismResult) -> (bool, Vec<String>) {
+    let mut reasons = Vec::new();
+
+    let (min_overall, min_security, max_critical) = gate_thresholds(root);
 
     if score.overall < min_overall {
         reasons.push(format!(
@@ -1398,11 +1484,10 @@ fn check_deploy_gate(root: &Path, score: &Score, result: &PrismResult) -> (bool,
 
 const BASELINE_FILE: &str = "verum.baseline.json";
 
-/// A stable identity for a finding, resilient to line-number drift. Keyed on
-/// the finding kind, the project-relative file, and the message with digits
-/// stripped (so "13 chunks" and "14 chunks", or a shifted line cited in the
-/// text, collapse to the same fingerprint). Deliberately ignores line numbers:
-/// a baseline should survive unrelated edits above the finding.
+/// The LEGACY (v1 `verum.baseline.json`) identity for a finding, kept only so
+/// baselines written by earlier releases keep waiving what they always
+/// waived. New baselines carry the hashed `Finding::fingerprint` instead,
+/// which additionally keys on the symbol name and disambiguates duplicates.
 fn finding_fingerprint(f: &Finding, root: &Path) -> String {
     let rel = f
         .file
@@ -1430,20 +1515,170 @@ fn is_baselineable(f: &Finding) -> bool {
         && f.kind != FindingKind::ParseFailure
 }
 
-fn load_baseline(root: &Path) -> Option<std::collections::HashSet<String>> {
+/// The auto-loaded `verum.baseline.json` next to the analysed tree, in either
+/// generation of the format.
+enum AutoBaseline {
+    /// v1: textual `kind|relative-path|message` identities (legacy files).
+    V1(std::collections::HashSet<String>),
+    /// v2: hashed stable fingerprints, as `verum baseline` writes today.
+    V2(std::collections::HashSet<String>),
+}
+
+impl AutoBaseline {
+    fn len(&self) -> usize {
+        match self {
+            AutoBaseline::V1(set) | AutoBaseline::V2(set) => set.len(),
+        }
+    }
+
+    /// Whether the baseline already records this finding.
+    fn waives(&self, f: &Finding, root: &Path) -> bool {
+        match self {
+            AutoBaseline::V1(set) => set.contains(&finding_fingerprint(f, root)),
+            AutoBaseline::V2(set) => set.contains(&f.fingerprint),
+        }
+    }
+}
+
+fn load_baseline(root: &Path) -> Option<AutoBaseline> {
     let text = std::fs::read_to_string(root.join(BASELINE_FILE)).ok()?;
     let val: serde_json::Value = serde_json::from_str(&text).ok()?;
+    if let Some(arr) = val.get("findings").and_then(|v| v.as_array()) {
+        return Some(AutoBaseline::V2(
+            arr.iter()
+                .filter_map(|e| e.get("fingerprint"))
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect(),
+        ));
+    }
     let arr = val.get("fingerprints")?.as_array()?;
-    Some(
+    Some(AutoBaseline::V1(
         arr.iter()
             .filter_map(|v| v.as_str().map(str::to_string))
             .collect(),
-    )
+    ))
 }
 
-async fn cmd_baseline(path: &Path) -> Result<()> {
+/// A set of previously-reported findings, loaded from either a full
+/// `verum report --format json` output or the minimal file `verum baseline`
+/// writes - both carry a `findings` array whose entries have a `fingerprint`.
+///
+/// Loading is LOUD: a missing file, malformed JSON, a document without a
+/// `findings` array, or an entry without a fingerprint is an error, never an
+/// empty baseline - silently treating garbage as "no known findings" would
+/// make the gate fail on every inherited finding, or worse, a truncated file
+/// could waive nothing without anyone noticing.
+struct FingerprintBaseline {
+    /// fingerprint -> kind label; a BTreeMap so listings are sorted.
+    entries: std::collections::BTreeMap<String, String>,
+}
+
+fn load_fingerprint_baseline(path: &Path) -> Result<FingerprintBaseline> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read baseline file {}", path.display()))?;
+    let val: serde_json::Value = serde_json::from_str(&text)
+        .with_context(|| format!("{} is not valid JSON", path.display()))?;
+    let arr = val
+        .get("findings")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "{} has no `findings` array - pass a `verum report --format json` \
+                 output or a file written by `verum baseline`",
+                path.display()
+            )
+        })?;
+    let mut entries = std::collections::BTreeMap::new();
+    for (i, entry) in arr.iter().enumerate() {
+        let fingerprint = entry
+            .get("fingerprint")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if fingerprint.is_empty() {
+            anyhow::bail!(
+                "{}: finding #{i} has no fingerprint - the file predates stable \
+                 fingerprints; regenerate it with this version of verum",
+                path.display()
+            );
+        }
+        let kind = entry
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?")
+            .to_string();
+        entries.insert(fingerprint.to_string(), kind);
+    }
+    Ok(FingerprintBaseline { entries })
+}
+
+/// The three-way partition of a run's findings against a baseline.
+struct BaselineDiff<'a> {
+    /// Baselineable findings whose fingerprint the baseline does not know -
+    /// the only findings a baselined gate may fail on. In report order.
+    new: Vec<&'a Finding>,
+    /// Baselineable findings the baseline already records.
+    existing_count: usize,
+    /// Baseline fingerprints matched by NO current finding of any kind: fixed
+    /// (or no longer detected), so they can be pruned from the baseline.
+    /// Sorted.
+    resolved: Vec<String>,
+}
+
+fn diff_against_baseline<'a>(
+    findings: &'a [Finding],
+    baseline: &FingerprintBaseline,
+) -> BaselineDiff<'a> {
+    // Resolution is judged against every current finding, not just the
+    // baselineable ones: a baseline built from a full report can carry e.g.
+    // chain fingerprints, and a chain that still exists is not "resolved"
+    // merely because the gate would never fail on it.
+    let current: std::collections::HashSet<&str> =
+        findings.iter().map(|f| f.fingerprint.as_str()).collect();
+    let mut new = Vec::new();
+    let mut existing_count = 0usize;
+    for f in findings.iter().filter(|f| is_baselineable(f)) {
+        if baseline.entries.contains_key(&f.fingerprint) {
+            existing_count += 1;
+        } else {
+            new.push(f);
+        }
+    }
+    let resolved = baseline
+        .entries
+        .keys()
+        .filter(|fp| !current.contains(fp.as_str()))
+        .cloned()
+        .collect();
+    BaselineDiff {
+        new,
+        existing_count,
+        resolved,
+    }
+}
+
+/// The additive `baseline` section of the JSON report: fingerprints only,
+/// so orchestrators can join them back onto the findings array.
+#[derive(serde::Serialize)]
+struct BaselineSection {
+    new: Vec<String>,
+    resolved: Vec<String>,
+    existing_count: usize,
+}
+
+impl BaselineSection {
+    fn from_diff(diff: &BaselineDiff<'_>) -> Self {
+        let mut new: Vec<String> = diff.new.iter().map(|f| f.fingerprint.clone()).collect();
+        new.sort();
+        BaselineSection {
+            new,
+            resolved: diff.resolved.clone(),
+            existing_count: diff.existing_count,
+        }
+    }
+}
+
+async fn cmd_baseline(path: &Path, out: Option<&Path>) -> Result<()> {
     println!();
-    let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let config = make_atlas_config(path);
     let standard = load_standard_from_file(path);
     let pb = make_spinner("Snapshotting findings...");
@@ -1451,28 +1686,51 @@ async fn cmd_baseline(path: &Path) -> Result<()> {
     let result = Prism::analyse_at(&ir, &standard, Some(path))?;
     pb.finish_and_clear();
 
-    let mut fingerprints: Vec<String> = result
+    // Minimal and diff-friendly: one line of identity per finding (stable
+    // fingerprint, kind, severity), sorted by fingerprint. No paths, no
+    // messages, no line numbers - nothing that churns the file when code
+    // moves around the findings.
+    let mut entries: Vec<(String, &'static str, String)> = result
         .findings
         .iter()
         .filter(|f| is_baselineable(f))
-        .map(|f| finding_fingerprint(f, &canon))
+        .map(|f| {
+            (
+                f.fingerprint.clone(),
+                finding_kind_label(&f.kind),
+                format!("{:?}", f.severity),
+            )
+        })
         .collect();
-    fingerprints.sort();
-    fingerprints.dedup();
+    entries.sort();
+    entries.dedup();
 
+    let findings: Vec<serde_json::Value> = entries
+        .iter()
+        .map(|(fingerprint, kind, severity)| {
+            serde_json::json!({
+                "fingerprint": fingerprint,
+                "kind": kind,
+                "severity": severity,
+            })
+        })
+        .collect();
     let doc = serde_json::json!({
-        "version": 1,
+        "version": 2,
         "note": "Generated by `verum baseline`. Gate fails only on findings not listed here.",
-        "count": fingerprints.len(),
-        "fingerprints": fingerprints,
+        "count": findings.len(),
+        "findings": findings,
     });
-    let out = path.join(BASELINE_FILE);
-    std::fs::write(&out, serde_json::to_string_pretty(&doc)?)?;
+    let out_path = out
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| path.join(BASELINE_FILE));
+    std::fs::write(&out_path, serde_json::to_string_pretty(&doc)?)
+        .with_context(|| format!("Failed to write {}", out_path.display()))?;
     println!(
         "  {}  Baseline written: {} findings snapshotted to {}",
         "✓".green(),
         doc["count"],
-        BASELINE_FILE
+        display_path(&out_path)
     );
     println!(
         "     {} `verum gate` will now fail only on findings introduced after this snapshot.",
@@ -1753,6 +2011,10 @@ struct ReportJson<'a> {
     test_reachability: &'a verum_lumen::reachability::TestReachability,
     #[serde(skip_serializing_if = "Option::is_none")]
     measured_coverage: Option<&'a verum_lumen::lcov::MeasuredCoverage>,
+    /// Present only with `--baseline`: the partition of this run's findings
+    /// against the supplied baseline, by fingerprint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    baseline: Option<BaselineSection>,
 }
 
 async fn cmd_report(
@@ -1760,12 +2022,26 @@ async fn cmd_report(
     format: &str,
     out: Option<&Path>,
     coverage: Option<&Path>,
+    baseline: Option<&Path>,
 ) -> Result<()> {
     let config = make_atlas_config(path);
     let root_display = config.root.to_string_lossy().into_owned();
     let standard = load_standard_from_file(path);
     let ir = Atlas::new(config).build()?;
     let mut result = Prism::analyse_at(&ir, &standard, Some(path))?;
+
+    // Loaded before any output so a missing or corrupt baseline is a loud
+    // error, never an empty comparison.
+    let baseline_diff = match baseline {
+        Some(file) => {
+            let loaded = load_fingerprint_baseline(file)?;
+            Some(BaselineSection::from_diff(&diff_against_baseline(
+                &result.findings,
+                &loaded,
+            )))
+        }
+        None => None,
+    };
 
     // A real coverage run beats a static estimate: when the user hands us
     // measured data, it replaces test-reachability in the score dimension. A
@@ -1817,6 +2093,7 @@ async fn cmd_report(
             loc: &result.loc,
             test_reachability: &result.test_reachability,
             measured_coverage: measured.as_ref(),
+            baseline: baseline_diff,
         };
         match out {
             Some(out_path) => {
@@ -2019,6 +2296,24 @@ async fn cmd_report(
             write_reachability_section(&mut md, &result.test_reachability)?;
             if let Some(measured) = &measured {
                 write_measured_section(&mut md, measured)?;
+            }
+            if let Some(section) = &baseline_diff {
+                writeln!(md, "\n## Baseline")?;
+                writeln!(md, "- New: {}", section.new.len())?;
+                writeln!(md, "- Existing (waived): {}", section.existing_count)?;
+                writeln!(md, "- Resolved: {}", section.resolved.len())?;
+                if !section.new.is_empty() {
+                    writeln!(md, "\n### New fingerprints")?;
+                    for fp in &section.new {
+                        writeln!(md, "- `{}`", fp)?;
+                    }
+                }
+                if !section.resolved.is_empty() {
+                    writeln!(md, "\n### Resolved fingerprints")?;
+                    for fp in &section.resolved {
+                        writeln!(md, "- `{}`", fp)?;
+                    }
+                }
             }
             writeln!(md, "\n## Findings ({})", result.findings.len())?;
             for f in &result.findings {

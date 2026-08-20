@@ -171,3 +171,219 @@ fn different_findings_have_distinct_fingerprints() {
     fps.dedup_by(|a, b| a.1 == b.1);
     assert_eq!(before, fps.len(), "no two findings share a fingerprint");
 }
+
+// ---------------------------------------------------------------------------
+// Baseline mode
+// ---------------------------------------------------------------------------
+
+/// `verum baseline` over the v1 fixture, written into `dir`.
+fn write_v1_baseline(dir: &ScratchDir) -> PathBuf {
+    let baseline = dir.path().join("baseline.json");
+    let output = run_verum(&[
+        "baseline",
+        fixture("gate_kit/v1").to_str().unwrap(),
+        "--out",
+        baseline.to_str().unwrap(),
+    ]);
+    assert!(
+        output.status.success(),
+        "verum baseline failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    baseline
+}
+
+#[test]
+fn the_baseline_file_is_minimal_sorted_and_diff_friendly() {
+    let dir = ScratchDir::new("baseline-format");
+    let baseline = write_v1_baseline(&dir);
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&baseline).unwrap()).unwrap();
+    assert_eq!(doc["version"], 2);
+    let findings = doc["findings"].as_array().expect("findings array");
+    assert!(!findings.is_empty());
+    let mut fps = Vec::new();
+    for f in findings {
+        let obj = f.as_object().expect("finding entry");
+        // Identity only: no path, no message, no line number to churn.
+        assert_eq!(
+            obj.keys().collect::<Vec<_>>(),
+            ["fingerprint", "kind", "severity"]
+        );
+        fps.push(obj["fingerprint"].as_str().unwrap().to_string());
+    }
+    let mut sorted = fps.clone();
+    sorted.sort();
+    assert_eq!(fps, sorted, "entries are sorted by fingerprint");
+}
+
+#[test]
+fn report_partitions_findings_into_new_existing_resolved() {
+    // v1 -> v2: the eval() was fixed (resolved), a hardcoded secret was
+    // introduced (new), and the md5 + two dead functions carried over.
+    let dir = ScratchDir::new("baseline-partition");
+    let baseline = write_v1_baseline(&dir);
+
+    let v1 = report_over(&fixture("gate_kit/v1"));
+    let v2 = report_json(&[
+        "report",
+        fixture("gate_kit/v2").to_str().unwrap(),
+        "--format",
+        "json",
+        "--baseline",
+        baseline.to_str().unwrap(),
+    ]);
+
+    let section = &v2["baseline"];
+    assert_eq!(
+        section["new"],
+        serde_json::json!([fingerprint_of(&v2, "HardcodedSecret")])
+    );
+    assert_eq!(
+        section["resolved"],
+        serde_json::json!([fingerprint_of(&v1, "EvalUsage")])
+    );
+    assert_eq!(section["existing_count"], 3);
+}
+
+#[test]
+fn without_a_baseline_the_report_carries_no_baseline_section() {
+    let report = report_over(&fixture("gate_kit/v1"));
+    assert!(
+        report.get("baseline").is_none(),
+        "the section is additive and only present on request"
+    );
+}
+
+#[test]
+fn gate_passes_on_baselined_findings_even_critical_ones() {
+    // v1 has two Criticals of its own; against its own baseline the gate
+    // must pass - inherited debt does not gate.
+    let dir = ScratchDir::new("baseline-gate-pass");
+    let baseline = write_v1_baseline(&dir);
+    let output = run_verum(&[
+        "gate",
+        fixture("gate_kit/v1").to_str().unwrap(),
+        "--baseline",
+        baseline.to_str().unwrap(),
+    ]);
+    assert!(
+        output.status.success(),
+        "gate must pass: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn gate_fails_on_a_new_critical_and_names_only_the_new_finding() {
+    let dir = ScratchDir::new("baseline-gate-fail");
+    let baseline = write_v1_baseline(&dir);
+    let output = run_verum(&[
+        "gate",
+        fixture("gate_kit/v2").to_str().unwrap(),
+        "--baseline",
+        baseline.to_str().unwrap(),
+    ]);
+    assert!(
+        !output.status.success(),
+        "a new Critical must fail the gate"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("NEW") && stdout.contains("HardcodedSecret"));
+    // The carried-over Criticals are waived, not re-litigated.
+    assert!(!stdout.contains("NEW CRITICAL: WeakCrypto"));
+    assert!(stdout.contains("1 new critical"));
+}
+
+#[test]
+fn a_full_json_report_works_as_a_baseline_too() {
+    let dir = ScratchDir::new("baseline-from-report");
+    let old_report = dir.path().join("v1-report.json");
+    let output = run_verum(&[
+        "report",
+        fixture("gate_kit/v1").to_str().unwrap(),
+        "--format",
+        "json",
+        "--out",
+        old_report.to_str().unwrap(),
+    ]);
+    assert!(output.status.success());
+
+    let ok = run_verum(&[
+        "gate",
+        fixture("gate_kit/v1").to_str().unwrap(),
+        "--baseline",
+        old_report.to_str().unwrap(),
+    ]);
+    assert!(ok.status.success(), "old report waives its own findings");
+
+    let fail = run_verum(&[
+        "gate",
+        fixture("gate_kit/v2").to_str().unwrap(),
+        "--baseline",
+        old_report.to_str().unwrap(),
+    ]);
+    assert!(!fail.status.success(), "the new Critical still gates");
+}
+
+#[test]
+fn a_missing_baseline_is_a_loud_error_not_an_empty_one() {
+    let output = run_verum(&[
+        "gate",
+        fixture("gate_kit/v1").to_str().unwrap(),
+        "--baseline",
+        "/nonexistent/verum-baseline.json",
+    ]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Failed to read baseline file"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn a_corrupt_baseline_is_a_loud_error_not_an_empty_one() {
+    let dir = ScratchDir::new("baseline-corrupt");
+
+    let garbage = dir.path().join("garbage.json");
+    std::fs::write(&garbage, "{not json").unwrap();
+    let output = run_verum(&[
+        "gate",
+        fixture("gate_kit/v1").to_str().unwrap(),
+        "--baseline",
+        garbage.to_str().unwrap(),
+    ]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("is not valid JSON"));
+
+    let wrong_shape = dir.path().join("wrong-shape.json");
+    std::fs::write(&wrong_shape, r#"{"hello": "world"}"#).unwrap();
+    let output = run_verum(&[
+        "report",
+        fixture("gate_kit/v1").to_str().unwrap(),
+        "--format",
+        "json",
+        "--baseline",
+        wrong_shape.to_str().unwrap(),
+    ]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("no `findings` array"));
+
+    // A findings array whose entries predate fingerprints is refused, not
+    // silently treated as matching nothing.
+    let no_fingerprints = dir.path().join("no-fingerprints.json");
+    std::fs::write(
+        &no_fingerprints,
+        r#"{"findings": [{"kind": "EvalUsage", "severity": "Critical"}]}"#,
+    )
+    .unwrap();
+    let output = run_verum(&[
+        "gate",
+        fixture("gate_kit/v1").to_str().unwrap(),
+        "--baseline",
+        no_fingerprints.to_str().unwrap(),
+    ]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("has no fingerprint"));
+}
