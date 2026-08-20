@@ -201,6 +201,95 @@ src/app.py
 
 ---
 
+## `verum check`
+
+WHEN TO USE: after every edit, when you need a machine verdict on whether the
+change introduced problems - the fastest path from "edited" to "safe to move
+on". Stdout carries only the verdict; logs go to stderr.
+
+```
+verum check <PATH> [--format json|text] [--fail-on <severity>] [--files a,b]
+```
+
+- `--format` - `json` (default) or `text`.
+- `--fail-on` - lowest severity that makes the check fail: `critical`, `high`
+  (default), `medium`, or `low`.
+- `--files` - comma-separated view filter; findings are narrowed to these
+  files and pass/counts follow the view. Analysis is still whole-program, so
+  cross-file detectors stay correct.
+
+Exit codes:
+
+- `0` - pass: no finding at or above `--fail-on`.
+- `1` - fail: at least one finding at or above `--fail-on`.
+- `2` - operational error (bad arguments, missing path, analysis failure).
+
+JSON contract (fields are additive-only; findings sorted severity desc, then
+file, line, kind, message, so identical input yields identical bytes):
+
+```
+{"pass": bool,
+ "counts": {"critical": n, "high": n, "medium": n, "low": n},
+ "findings": [{"kind", "severity", "file", "line", "message",
+               "why", "fix_hint", "suggestion", "confidence"}],
+ "duration_ms": n}
+```
+
+`why` is the one-sentence consequence of leaving the finding; `fix_hint` is
+the concrete next edit that resolves it. `file` is relative to the analysed
+root. With `VERUM_STATS=1` in the environment, one JSON line per invocation
+(`{ts_ms, cmd, duration_ms, pass, counts}` - never code text) is appended to
+`$VERUM_STATS_FILE` (default `~/.verum/stats.jsonl`); the verdict bytes and
+exit code are unaffected.
+
+Worked example:
+
+```console
+$ verum check ./demo; echo "exit=$?"
+{"pass":false,"counts":{"critical":1,"high":0,"medium":0,"low":0},"findings":[{"kind":"EvalUsage","severity":"critical","file":"runner.php","line":4,"message":"eval() usage detected - potential code injection","why":"eval executes arbitrary strings, so any input that reaches it is remote code execution.","fix_hint":"replace eval at runner.php:4 with explicit dispatch (a whitelisted map of allowed operations) or a proper parser for the data","suggestion":"Remove eval() and use a safe alternative","confidence":0.99}],"duration_ms":11}
+exit=1
+```
+
+Apply the `fix_hint`, run `verum check` again, and the verdict flips to
+`"pass":true` with exit `0`.
+
+---
+
+## `verum explain`
+
+WHEN TO USE: when a finding kind needs justification or a fix pattern - the
+entry says what the detector looks for, why it matters, a flagged and a fixed
+example, and when suppressing is reasonable. Trust a finding you understand.
+
+```
+verum explain [KIND] [--all] [--format text|markdown]
+```
+
+- `--all` - print the full entry for every kind.
+- `--format` - `text` (default) or `markdown` (the source of
+  `docs/detectors.md`).
+
+`KIND` accepts the enum name (`NonConstantTimeComparison`) or its kebab alias
+(`non-constant-time-comparison`), case-insensitive. With no argument, lists
+every kind with a one-line summary. Unknown kinds exit `1` and suggest the
+closest names.
+
+Worked example:
+
+```console
+$ verum explain non-constant-time-comparison
+
+  NonConstantTimeComparison  non-constant-time-comparison
+  A security-sensitive value compared with `==`
+  category: Cryptography
+
+  Detects
+    An `==` or `!=` in Rust where one operand names a MAC, CMAC, signature,
+    secret, digest, or verifier, or a compound such as `auth_tag`, ...
+```
+
+---
+
 ## `verum baseline`
 
 WHEN TO USE: once, when adopting the gate on a codebase that does not pass it
