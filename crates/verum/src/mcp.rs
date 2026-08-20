@@ -1002,7 +1002,7 @@ fn tool_definitions() -> Vec<Value> {
         "properties": {
             "query": {
                 "type": "string",
-                "description": "Symbol name - short (`getUserById`) or fully qualified (`App\\Helpers\\UserHelper::getUserById`)."
+                "description": "Symbol name - short (`getUserById`) or fully qualified (`App\\Helpers\\UserHelper::getUserById`). An ambiguous short name is refused with the candidate list; re-ask with one of those."
             }
         },
         "required": ["query"]
@@ -1011,24 +1011,24 @@ fn tool_definitions() -> Vec<Value> {
     let mut tools = vec![
         json!({
             "name": "overview",
-            "description": "Orient in the codebase: size, languages, call-graph shape (resolution rates, critical depth, most central symbols by PageRank), score, and finding count.",
+            "description": "Call first in an unfamiliar repository, before planning any change. Returns size, languages, call-graph shape (resolution rates, critical depth, the most central symbols by PageRank), the overall score, and the finding count.",
             "inputSchema": { "type": "object", "properties": {} }
         }),
         json!({
             "name": "find_symbol",
-            "description": "Search symbols by name (exact, then substring). Returns kind, location, visibility, and entry-point status for each match.",
+            "description": "Call instead of grepping when you know part of a name but not where it lives. Matches exactly first, then by substring; returns kind, file:line, visibility, and entry-point status for each match, plus the total match count.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "query": { "type": "string", "description": "Name or name fragment." },
-                    "limit": { "type": "integer", "description": "Max results (default 20)." }
+                    "limit": { "type": "integer", "description": "Max symbols listed (default 20); `total_matches` is always exact." }
                 },
                 "required": ["query"]
             }
         }),
         json!({
             "name": "definition_of",
-            "description": "Where is this symbol defined? Exact-match first (fully qualified, then short name), substring as fallback - the result says which tier matched.",
+            "description": "Call to jump to where a symbol is defined before reading or editing it. Returns the definition sites with file:line, plus a `provenance` field saying whether the match was exact (fully qualified), exact (short name), or a substring fallback - so you know how much to trust it.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1039,73 +1039,73 @@ fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "references_of",
-            "description": "Every reference to this symbol: call sites from the resolved call graph, plus weaker name-based matches reported separately so you know the confidence of each.",
+            "description": "Call before renaming, changing a signature, or deleting a symbol. Returns `resolved_references` (exact call-graph edges with file:line) and `name_match_references` (dynamic or unresolved calls with the same final name) separately, so high- and low-confidence hits stay distinguishable.",
             "inputSchema": sym_query
         }),
         json!({
             "name": "callers_of",
-            "description": "Who calls this symbol? Direct callers with exact call sites (file:line). Facts from the resolved call graph - no guessing.",
+            "description": "Call to answer \"who uses this?\" one level up. Returns the direct callers with exact call sites (file:line) from the resolved call graph - facts, not guesses. For the full blast radius use `impact_of`; for dynamic-dispatch hits too use `references_of`.",
             "inputSchema": sym_query
         }),
         json!({
             "name": "callees_of",
-            "description": "What does this symbol call? Resolved callees with call sites, plus unresolved and dynamic call names it makes.",
+            "description": "Call to understand what a function does without reading its body, or to find its dependencies. Returns resolved callees with call sites, plus the unresolved names (external crates, stdlib) and dynamic calls it makes.",
             "inputSchema": sym_query
         }),
         json!({
             "name": "impact_of",
-            "description": "Blast radius: every symbol that transitively reaches this one, and the files they live in - what could break if it changes.",
+            "description": "Call before a breaking change to size its blast radius. Returns every symbol that transitively reaches this one and the files they live in - the set that could break if it changes, and the set worth reviewing or testing after. The symbol list is capped at 100; the count and file list are exact.",
             "inputSchema": sym_query
         }),
         json!({
             "name": "dead_code",
-            "description": "Symbols with no resolved caller, no name-match caller, and no path from any entry point. Confidence-scored; dynamic-dispatch risk lowers confidence.",
+            "description": "Call before deleting code, or when asked what is unused. Returns the symbols with no resolved caller, no name-match caller, and no path from any entry point, each with a confidence score - dynamic dispatch and reflection lower it, so check anything below ~0.9 by hand.",
             "inputSchema": { "type": "object", "properties": {} }
         }),
         json!({
             "name": "audit",
-            "description": "Full deterministic audit: security, dead code, duplicates, naming, complexity, infrastructure. Returns the score and findings (filterable, capped).",
+            "description": "Call after finishing an edit, and before telling the user the work is done. Runs the full deterministic audit - security, dead code, duplicates, naming, complexity, infrastructure - and returns the score plus the findings with file:line, severity and a suggested fix. Use `min_severity` to cut noise. For a diff-sized answer, prefer `audit_delta`.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "min_severity": { "type": "string", "enum": ["critical", "high", "medium", "low", "info"], "description": "Only findings at or above this severity." },
-                    "limit": { "type": "integer", "description": "Max findings listed (default 100); counts are always exact." }
+                    "min_severity": { "type": "string", "enum": ["critical", "high", "medium", "low", "info"], "description": "Only findings at or above this severity. Use \"high\" to see just what must be fixed." },
+                    "limit": { "type": "integer", "description": "Max findings listed (default 100); `total_findings` and `by_severity` are always exact." }
                 }
             }
         }),
         json!({
             "name": "audit_delta",
-            "description": "Findings only in files changed vs a git ref (e.g. `HEAD`, `origin/main`) - the right scope for judging a diff. The whole tree is still analysed so cross-file facts stay correct.",
+            "description": "Call to judge your own diff, or to review a branch, without wading through pre-existing findings. Returns only the findings in files changed versus a git ref (uncommitted and untracked files included). The whole tree is still analysed, so cross-file facts like dead code stay correct.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "git_ref": { "type": "string", "description": "Base git ref to diff against." }
+                    "git_ref": { "type": "string", "description": "Base git ref to diff against, e.g. \"HEAD\" for uncommitted work or \"origin/main\" for a branch." }
                 },
                 "required": ["git_ref"]
             }
         }),
         json!({
             "name": "perf_advice",
-            "description": "OPT-IN performance advisory for a chosen profile (latency | throughput | memory | cpu | realtime | all). Surfaces the constructs that hurt that objective - hot-path allocations, locks, unbounded channels, blocking-in-async - ranked by impact, each with a concrete design fix (e.g. ring buffer vs unbounded channel). Informational; call it only when the user wants performance-tuning guidance.",
+            "description": "Call ONLY when the user asks about performance - it is advisory, not scored, and noisy otherwise. Returns the constructs that hurt the chosen objective (hot-path allocations, locks, unbounded channels, blocking-in-async), ranked by impact, each with locations and a concrete design fix such as a bounded ring buffer in place of an unbounded channel. Tuned for Rust; other languages give limited signal.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "profile": {
                         "type": "string",
                         "enum": ["latency", "throughput", "memory", "cpu", "realtime", "all"],
-                        "description": "What to optimise for. Defaults to all."
+                        "description": "What to optimise for; `realtime` means latency plus determinism. Defaults to all."
                     }
                 }
             }
         }),
         json!({
             "name": "endpoints",
-            "description": "Cross-language endpoint reconciliation: matches client HTTP calls (fetch/axios) to the backend route handlers that serve them, and flags frontend calls that hit NO route (likely 404s/typos) and routes with NO caller (possibly-dead endpoints) - findings no single-language tool can produce.",
+            "description": "Call when changing an API route or a client fetch, or to check a frontend and backend still agree. Matches client HTTP calls (fetch/axios) to the route handlers that serve them across the language boundary, and returns the calls that hit NO route (likely 404s or typos) and the routes NO client calls (possibly dead) - findings a single-language tool cannot produce.",
             "inputSchema": { "type": "object", "properties": {} }
         }),
         json!({
             "name": "duplicates",
-            "description": "Duplicate implementations: exact, renamed (identifier-insensitive), and structural copies, grouped with a canonical pick per group.",
+            "description": "Call before adding a helper, to check one already exists, or when consolidating repeated logic. Returns groups of duplicate implementations - exact, renamed (identifier-insensitive), and structural - each with a canonical pick to keep, the copies to remap onto it, and a confidence score.",
             "inputSchema": { "type": "object", "properties": {} }
         }),
     ];
