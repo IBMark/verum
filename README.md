@@ -166,6 +166,19 @@ Any MCP-capable client can connect over stdio. For example, with Claude Code:
 claude mcp add verum -- verum mcp /path/to/project
 ```
 
+## For coding agents & CI
+
+[`docs/agents.md`](docs/agents.md) is the command reference written to be read
+in-context by an agent: one screen per command with when to use it, the exact
+invocation, the JSON schema field by field, the exit codes, and a worked example
+of real output. A test asserts every flag it documents against `--help`, so it
+cannot drift from the CLI.
+
+[`integrations/`](integrations/) holds ready-to-copy configuration for the
+places code actually changes - a Claude Code `PostToolUse` hook and MCP
+registration, a Cursor rule, a `pre-commit` hook, and a GitHub Actions workflow
+that uploads SARIF and runs the gate. Every snippet is syntax-checked in CI.
+
 ## Cross-language
 
 Verum parses every supported language into one IR, so a `fetch('/api/users')` in

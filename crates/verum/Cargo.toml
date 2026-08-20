@@ -41,3 +41,7 @@ indicatif = { workspace = true }
 console = { workspace = true }
 colored = { workspace = true }
 walkdir = { workspace = true }
+
+[dev-dependencies]
+# Syntax-validates the YAML snippets shipped in integrations/ (docs_test.rs).
+serde_yaml = { workspace = true }

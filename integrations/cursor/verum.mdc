@@ -1,0 +1,43 @@
+---
+description: Verify every code change with Verum before reporting it as done.
+alwaysApply: true
+---
+
+# Verum verification
+
+Verum is a deterministic whole-program analyzer. Same tree in, same findings
+out - so its verdict is checkable, not advisory. Run it; do not guess at it.
+
+## Before you conclude any task that touched code
+
+Run, from the repository root:
+
+```
+verum gate .
+```
+
+- Exit `0`: the deploy gate passed. You may conclude.
+- Exit `1`: the gate failed and the reasons are printed. Fix them and re-run.
+  Do not report the task as complete on a failing gate; say so explicitly if
+  you are leaving it failing on purpose.
+
+## While working
+
+- `verum audit .` - full finding list with a score, never exits non-zero.
+  Use it to see what is wrong; use `gate` to decide whether you are done.
+- `verum audit <subdir>` - same, scoped to one directory when the tree is large.
+- `verum report . --format json` - the same run as machine-readable JSON when
+  you need to filter findings by `severity`, `kind`, or `file`.
+- `verum map .` - module and symbol graphs, cycles, data flows and routes,
+  for orienting in unfamiliar code before you change it.
+
+## Rules
+
+- Never edit or delete `verum.baseline.json` to make the gate pass. It is a
+  ratchet: it waives findings that already existed, not ones you introduce.
+- Never lower the thresholds in `verum.standard.json` to make the gate pass
+  unless the user asks for exactly that.
+- A path Verum cannot read scores 100 and exits 0. If the output says
+  `0 files`, the path is wrong - fix the path, do not treat it as a pass.
+- Runs are fast (well under a second on trees below ~100k lines), so re-running
+  after each change is cheaper than reasoning about whether you need to.
