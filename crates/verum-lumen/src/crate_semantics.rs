@@ -11,7 +11,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use verum_nucleus::{Finding, FindingKind, Ir, Language, Severity};
+use verum_nucleus::{matchable_path, Finding, FindingKind, Ir, Language, Severity};
 
 /// A behavioural rule keyed to a crate. `needle` is the code shape that
 /// triggers it; `guard` (if present) suppresses the rule for the whole file
@@ -118,7 +118,7 @@ pub fn analyse_with_context(
 
     let mut findings = Vec::new();
     for path in files {
-        let path_str = path.to_string_lossy();
+        let path_str = matchable_path(path);
         if path_str.contains("/target/") {
             continue;
         }

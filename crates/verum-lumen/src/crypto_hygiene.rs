@@ -25,7 +25,7 @@ use std::sync::OnceLock;
 use rayon::prelude::*;
 use regex::Regex;
 
-use verum_nucleus::{Finding, FindingKind, Ir, Language, Severity};
+use verum_nucleus::{matchable_path, Finding, FindingKind, Ir, Language, Severity};
 
 /// Whole-word identifier fragments that mark a security-sensitive value.
 /// Matched against `.`/`_`/`:`-delimited components of an identifier, so a
@@ -134,7 +134,7 @@ pub fn analyse_with_context(ir: &Ir, ctx: &crate::scan::ScanContext) -> Vec<Find
         .par_iter()
         .map(|path| {
             let mut file_findings = Vec::new();
-            let path_str = path.to_string_lossy();
+            let path_str = matchable_path(path);
             if path_str.contains("/target/")
                 || path_str.contains("vendor/")
                 || path_str.contains("node_modules/")

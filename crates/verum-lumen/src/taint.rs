@@ -18,8 +18,8 @@ use regex::Regex;
 
 use crate::scan::ScanContext;
 use verum_nucleus::{
-    Finding, FindingKind, Ir, Language, Severity, SymbolId, SymbolKind, TaintHop, TaintPath,
-    TaintSink, TaintSource,
+    matchable_path, Finding, FindingKind, Ir, Language, Severity, SymbolId, SymbolKind, TaintHop,
+    TaintPath, TaintSink, TaintSource,
 };
 
 const PHP_SOURCES: &[&str] = &["$_GET", "$_POST", "$_REQUEST", "$_COOKIE", "$_FILES"];
@@ -271,7 +271,7 @@ pub fn analyse_with_context(ir: &Ir, ctx: &ScanContext) -> (Vec<Finding>, Vec<Ta
     // rebuilding the span index on every round.
     let mut contents: Vec<(PathBuf, ScanLang, Cow<'_, [String]>, SpanIndex)> = Vec::new();
     for (path, language) in &files {
-        let path_str = path.to_string_lossy();
+        let path_str = matchable_path(path);
         if path_str.contains("vendor/")
             || path_str.contains("node_modules/")
             || path_str.contains("/target/")
@@ -486,7 +486,7 @@ pub fn analyse_with_context(ir: &Ir, ctx: &ScanContext) -> (Vec<Finding>, Vec<Ta
 /// vulnerability, so they are excluded from taint sink reporting. Only ever
 /// consulted for Rust-language files.
 fn is_rust_non_runtime_path(path: &Path) -> bool {
-    let s = path.to_string_lossy();
+    let s = matchable_path(path);
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())

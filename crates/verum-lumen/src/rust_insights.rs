@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 
 use crate::scan::ScanContext;
 use verum_nucleus::{
-    Direction, Finding, FindingKind, Ir, Language, Objective, PerfImpact, Severity, SymbolId,
-    SymbolKind,
+    matchable_path, Direction, Finding, FindingKind, Ir, Language, Objective, PerfImpact, Severity,
+    SymbolId, SymbolKind,
 };
 
 /// Which objectives a construct affects and how. Helps = a deliberate
@@ -216,7 +216,7 @@ pub fn analyse_with_context(ir: &Ir, ctx: &ScanContext) -> Vec<Finding> {
     files.sort();
 
     for path in &files {
-        let path_str = path.to_string_lossy();
+        let path_str = matchable_path(path);
         if path_str.contains("/target/") {
             continue;
         }

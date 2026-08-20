@@ -22,7 +22,7 @@ use rayon::prelude::*;
 
 use crate::scan::ScanContext;
 use verum_nucleus::Severity;
-use verum_nucleus::{Finding, FindingKind, Ir, SymbolId, SymbolKind};
+use verum_nucleus::{matchable_path, Finding, FindingKind, Ir, SymbolId, SymbolKind};
 
 /// Largest UDP payload that fits a 1500-byte Ethernet MTU with IPv4 + UDP
 /// headers. Anything above this fragments.
@@ -158,7 +158,7 @@ pub fn analyse_with_context(ir: &Ir, ctx: &ScanContext) -> Vec<Finding> {
         .par_iter()
         .map(|path| {
             let mut file_findings = Vec::new();
-            let path_str = path.to_string_lossy();
+            let path_str = matchable_path(path);
             if path_str.contains("/target/")
                 || path_str.contains("node_modules/")
                 || path_str.contains("vendor/")

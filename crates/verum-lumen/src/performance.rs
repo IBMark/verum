@@ -1,6 +1,6 @@
 use regex::Regex;
 
-use verum_nucleus::{Finding, FindingKind, Ir, Severity};
+use verum_nucleus::{matchable_path, Finding, FindingKind, Ir, Severity};
 
 pub fn analyse(ir: &Ir) -> Vec<Finding> {
     let mut findings = Vec::new();
@@ -25,7 +25,7 @@ fn detect_n_plus_one(ir: &Ir) -> Vec<Finding> {
             .expect("valid regex");
 
     for path in ir.files.keys() {
-        let path_str = path.to_string_lossy();
+        let path_str = matchable_path(path);
 
         if !path_str.ends_with(".php") {
             continue;
@@ -131,7 +131,7 @@ fn detect_missing_hook_deps(ir: &Ir) -> Vec<Finding> {
     let mut findings = Vec::new();
 
     for path in ir.files.keys() {
-        let path_str = path.to_string_lossy();
+        let path_str = matchable_path(path);
 
         let is_js_ts = path_str.ends_with(".js")
             || path_str.ends_with(".jsx")

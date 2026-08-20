@@ -2,7 +2,7 @@ use std::fs;
 
 use anyhow::{Context, Result};
 
-use verum_nucleus::{Ir, Language, Symbol, Visibility};
+use verum_nucleus::{matchable_path, Ir, Language, Symbol, Visibility};
 
 /// Magic method names that should never be auto-deleted.
 const MAGIC: &[&str] = &[
@@ -83,7 +83,7 @@ pub fn is_safe_to_auto_delete(symbol: &Symbol, _ir: &Ir) -> bool {
         return false;
     }
 
-    let path_str = symbol.file.to_string_lossy();
+    let path_str = matchable_path(&symbol.file);
 
     if path_str.contains("vendor") || path_str.contains("node_modules") {
         return false;

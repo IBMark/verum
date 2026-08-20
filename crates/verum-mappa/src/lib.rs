@@ -20,7 +20,7 @@ use std::time::Instant;
 use anyhow::Result;
 use rayon::prelude::*;
 
-use verum_nucleus::{FileId, FileInfo, Framework, Ir, Language, SymbolId};
+use verum_nucleus::{matchable_path, FileId, FileInfo, Framework, Ir, Language, SymbolId};
 
 /// Deterministic string hash (FNV-1a) for symbol/file ids and source hashes.
 /// ahash - even `AHasher::default()` - is seeded per process, so ids and
@@ -318,7 +318,7 @@ impl Atlas {
                 continue;
             }
 
-            let path_str = path.to_string_lossy();
+            let path_str = matchable_path(path);
             if path_str.contains("vendor/") || path_str.contains("node_modules/") {
                 continue;
             }
@@ -600,7 +600,7 @@ fn detect_entry_points(ir: &mut Ir) {
     let is_laravel = ir.framework == Framework::Laravel;
 
     for (id, sym) in &ir.symbols {
-        let path_str = sym.file.to_string_lossy();
+        let path_str = matchable_path(&sym.file);
 
         if path_str.contains("Controller")
             && matches!(

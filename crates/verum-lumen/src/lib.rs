@@ -35,6 +35,13 @@ use verum_nucleus::{DuplicateGroup, Finding, FindingKind, Ir, Score};
 /// `fixtures` is deliberately *not* auxiliary: this project's own test suite
 /// points the analyzer at fixture trees as real targets.
 pub fn is_auxiliary_path(path: &str) -> bool {
+    // Normalize backslashes first: callers pass `to_string_lossy()` of a raw
+    // (OS-native) path, and on Windows that means `\`-separated. Every check
+    // below is written against `/`-separated literals; without this, the
+    // `tests/fixtures` substring check below never matches on Windows. A
+    // no-op on Unix paths, which are already `/`-separated.
+    let path = path.replace('\\', "/");
+    let path = path.as_str();
     // Verum's own test suite points the analyzer at `tests/fixtures/` trees as
     // deliberate targets. A real project's `test/fixtures/` or
     // `resources/test/` of intentionally-broken code (e.g. a linter's test
@@ -108,6 +115,10 @@ pub fn is_auxiliary_path(path: &str) -> bool {
 /// positive here inflates reachability - the reason it lists only markers that
 /// unambiguously name a test.
 pub fn is_test_path(path: &str) -> bool {
+    // See the matching comment in `is_auxiliary_path`: normalize `\` to `/`
+    // so the `tests/fixtures` check below still matches a Windows-native path.
+    let path = path.replace('\\', "/");
+    let path = path.as_str();
     if path.contains("tests/fixtures") {
         return false;
     }

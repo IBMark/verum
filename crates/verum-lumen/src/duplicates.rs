@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use verum_nucleus::{
-    CallTarget, DuplicateGroup, Finding, FindingKind, Ir, Location, Severity, SimilarityKind,
-    Symbol, SymbolId, SymbolKind,
+    matchable_path, CallTarget, DuplicateGroup, Finding, FindingKind, Ir, Location, Severity,
+    SimilarityKind, Symbol, SymbolId, SymbolKind,
 };
 
 /// Renamed/semantic grouping needs a body of at least this many lines
@@ -37,7 +37,7 @@ pub fn analyse(ir: &Ir) -> (Vec<Finding>, Vec<DuplicateGroup>) {
                 return false;
             }
             // `fixtures` are Verum's own analysis targets - never skip them.
-            let p = sym.file.to_string_lossy();
+            let p = matchable_path(&sym.file);
             if p.contains("fixtures") {
                 return true;
             }

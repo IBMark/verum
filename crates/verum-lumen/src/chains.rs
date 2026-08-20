@@ -16,7 +16,8 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use verum_nucleus::{
-    Finding, FindingKind, Ir, Language, Location, Severity, SymbolId, TaintSink, TaintSource,
+    matchable_path, Finding, FindingKind, Ir, Language, Location, Severity, SymbolId, TaintSink,
+    TaintSource,
 };
 
 /// Maximum hops to walk from an entry point before giving up.
@@ -80,7 +81,7 @@ pub fn analyse(ir: &Ir) -> Vec<Finding> {
         .map(|(id, sym)| {
             (
                 *id,
-                tier_of(&sym.fully_qualified, &sym.file.to_string_lossy()),
+                tier_of(&sym.fully_qualified, &matchable_path(&sym.file)),
             )
         })
         .collect();
@@ -450,7 +451,7 @@ fn is_real_entry(s: &verum_nucleus::Symbol) -> bool {
     if !matches!(s.kind, Method | Function | StaticMethod | Class) {
         return false;
     }
-    if is_test_path(&s.file.to_string_lossy()) {
+    if is_test_path(&matchable_path(&s.file)) {
         return false;
     }
     let n = s.name.to_ascii_lowercase();

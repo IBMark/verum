@@ -1,7 +1,7 @@
 use rayon::prelude::*;
 use regex::Regex;
 
-use verum_nucleus::{Finding, FindingKind, Ir, Severity, TaintSink};
+use verum_nucleus::{matchable_path, Finding, FindingKind, Ir, Severity, TaintSink};
 
 use crate::SecurityConfig;
 
@@ -325,7 +325,7 @@ pub fn analyse_with_context(
                     | verum_nucleus::Language::Python
             );
 
-            let path_str = path.to_string_lossy();
+            let path_str = matchable_path(path);
 
             // Vendored code, compiled views and Blade templates are full of display
             // hashes and generated markup - pure false-positive territory. Test and

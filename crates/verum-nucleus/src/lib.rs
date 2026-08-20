@@ -1,6 +1,22 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// `path`'s lossy string with backslashes normalized to `/`, for matching
+/// against hardcoded `/`-separated patterns (`"/tests/"`, `"/vendor/"`, file
+/// extensions, ...).
+///
+/// `Path::to_string_lossy` returns the OS-native separator, so a call site
+/// written against `/`-separated literals silently stops matching on
+/// Windows (a path like `src\tests\foo.rs` never contains the substring
+/// `"/tests/"`). This is a no-op on Unix, where paths are already
+/// `/`-separated, so it never changes Linux output.
+///
+/// Not for display: printed/report paths go through the analysis crate's own
+/// `relative_display`, which additionally strips the analysis root.
+pub fn matchable_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SymbolId(pub u64);

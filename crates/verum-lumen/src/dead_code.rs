@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use regex::Regex;
 
 use verum_nucleus::{
-    CallTarget, Finding, FindingKind, Framework, Ir, Language, Severity, SymbolId, SymbolKind,
-    Visibility,
+    matchable_path, CallTarget, Finding, FindingKind, Framework, Ir, Language, Severity, SymbolId,
+    SymbolKind, Visibility,
 };
 
 use crate::DeadCodeConfig;
@@ -178,7 +178,7 @@ fn matches_custom_patterns(name: &str, patterns: &[Regex]) -> bool {
 
 /// PascalCase export in a JS/TS file - likely a React component rendered via JSX.
 fn is_react_component(sym: &verum_nucleus::Symbol) -> bool {
-    let path_str = sym.file.to_string_lossy();
+    let path_str = matchable_path(&sym.file);
     let is_tsx_jsx = path_str.ends_with(".tsx")
         || path_str.ends_with(".jsx")
         || path_str.ends_with(".ts")
@@ -201,7 +201,7 @@ fn is_react_hook(sym: &verum_nucleus::Symbol) -> bool {
     if !matches!(sym.kind, SymbolKind::Function) {
         return false;
     }
-    let path_str = sym.file.to_string_lossy();
+    let path_str = matchable_path(&sym.file);
     let is_js_ts = path_str.ends_with(".tsx")
         || path_str.ends_with(".jsx")
         || path_str.ends_with(".ts")
@@ -219,7 +219,7 @@ fn is_react_hook(sym: &verum_nucleus::Symbol) -> bool {
 }
 
 fn is_in_laravel_framework_path(sym: &verum_nucleus::Symbol) -> bool {
-    let path_str = sym.file.to_string_lossy();
+    let path_str = matchable_path(&sym.file);
     path_str.contains("/Models/")
         || path_str.contains("/Listeners/")
         || path_str.contains("/Events/")
@@ -398,7 +398,7 @@ pub fn analyse(ir: &Ir, config: &DeadCodeConfig) -> Vec<Finding> {
         }
 
         // Skip test suites but not fixtures - fixtures are analysis targets.
-        let path_str = sym.file.to_string_lossy();
+        let path_str = matchable_path(&sym.file);
         if (path_str.contains("/tests/") && !path_str.contains("fixtures"))
             || path_str.ends_with("Test.php")
             || path_str.ends_with("_test.rs")

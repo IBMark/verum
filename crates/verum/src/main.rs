@@ -15,7 +15,8 @@ use verum_faber::{Forge, ForgeConfig};
 use verum_lumen::{Prism, PrismResult, Standard};
 use verum_mappa::{Atlas, AtlasConfig};
 use verum_nucleus::{
-    DecisionRequest, Finding, FindingKind, Language, PipelineResult, Score, Severity,
+    matchable_path, DecisionRequest, Finding, FindingKind, Language, PipelineResult, Score,
+    Severity,
 };
 
 #[derive(Parser)]
@@ -164,7 +165,7 @@ fn detect_language(root: &Path) -> Language {
         if !p.is_file() {
             continue;
         }
-        let path_str = p.to_string_lossy();
+        let path_str = matchable_path(p);
         if path_str.contains("vendor/")
             || path_str.contains("node_modules/")
             || path_str.contains(".git/")

@@ -1,4 +1,4 @@
-use verum_nucleus::{Finding, FindingKind, Ir, Language, Severity, SymbolKind};
+use verum_nucleus::{matchable_path, Finding, FindingKind, Ir, Language, Severity, SymbolKind};
 
 use crate::{NamingConfig, NamingConvention, NamingRules};
 
@@ -19,7 +19,7 @@ pub fn analyse(ir: &Ir, config: &NamingConfig) -> Vec<Finding> {
         if sym.name.starts_with("__file_scope_") || sym.name.starts_with("blade::") {
             continue;
         }
-        let path_str = sym.file.to_string_lossy();
+        let path_str = matchable_path(&sym.file);
         if path_str.contains("vendor/") || path_str.contains("node_modules/") {
             continue;
         }
@@ -282,7 +282,7 @@ pub fn analyse(ir: &Ir, config: &NamingConfig) -> Vec<Finding> {
             ) {
                 return false;
             }
-            let path_str = s.file.to_string_lossy();
+            let path_str = matchable_path(&s.file);
             !path_str.contains("vendor/")
                 && !path_str.contains("node_modules/")
                 && !path_str.contains("/target/")
