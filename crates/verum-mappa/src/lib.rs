@@ -187,7 +187,11 @@ pub struct Atlas {
 /// influences what gets mapped.
 fn profile_phase(profile: bool, name: &str, since: Instant) -> Instant {
     if profile {
-        eprintln!("  atlas {:<18} {:>6.2}s", name, since.elapsed().as_secs_f64());
+        eprintln!(
+            "  atlas {:<18} {:>6.2}s",
+            name,
+            since.elapsed().as_secs_f64()
+        );
     }
     Instant::now()
 }

@@ -362,13 +362,13 @@ pub fn analyse_with_context(
                 // reports both.
                 let weak_funcs: &[(&str, &str)] = if dynamic_lang { WEAK_FUNCS } else { &[] };
                 for &(func, pattern) in weak_funcs {
-                    if !contains_at_word_start(&line, pattern) {
+                    if !contains_at_word_start(line, pattern) {
                         continue;
                     }
 
                     // Comment-only lines never flag, even when the function is on
                     // the forbid list (`// TODO: replace md5($pw)` is not a call).
-                    if is_comment_line(&line) {
+                    if is_comment_line(line) {
                         continue;
                     }
 
@@ -390,7 +390,7 @@ pub fn analyse_with_context(
                     let severity = if is_always_forbidden {
                         Severity::Critical
                     } else {
-                        classify_weak_crypto_severity(&line)
+                        classify_weak_crypto_severity(line)
                     };
 
                     // Info = benign context, don't flag.
@@ -434,7 +434,7 @@ pub fn analyse_with_context(
                 // Other always-forbidden crypto (des, rc4, ...). Word-boundary check
                 // so "des(" inside "includes(" doesn't match.
                 for (forbidden, pattern) in forbid_patterns.iter().filter(|_| dynamic_lang) {
-                    if is_comment_line(&line) {
+                    if is_comment_line(line) {
                         break;
                     }
                     {
@@ -470,8 +470,8 @@ pub fn analyse_with_context(
                     }
                 }
 
-                if dynamic_lang && contains_at_word_start(&line, "eval(") {
-                    if is_comment_line(&line) {
+                if dynamic_lang && contains_at_word_start(line, "eval(") {
+                    if is_comment_line(line) {
                         continue;
                     }
 
@@ -491,8 +491,8 @@ pub fn analyse_with_context(
                     });
                 }
 
-                if secret_re.is_match(&line) {
-                    if is_comment_line(&line) {
+                if secret_re.is_match(line) {
+                    if is_comment_line(line) {
                         continue;
                     }
 
@@ -509,20 +509,20 @@ pub fn analyse_with_context(
 
                     // Identifier-like literals (permission keys, config/route names)
                     // such as `= 'database.view_password'` aren't credentials.
-                    if quoted_value_is_identifier_like(&line) {
+                    if quoted_value_is_identifier_like(line) {
                         continue;
                     }
 
                     // Status/label strings that match the key pattern but report
                     // state rather than a value - `jwt_secret = "configured"`.
-                    if quoted_value_is_status_word(&line) {
+                    if quoted_value_is_status_word(line) {
                         continue;
                     }
 
                     // Templates / interpolated values (`ADMIN_TOKEN='{hash}'`,
                     // `"${x}"`, `%s`) emit a secret at runtime or are editor
                     // tokenizer patterns, not literal credentials.
-                    if quoted_value_is_template(&line) {
+                    if quoted_value_is_template(line) {
                         continue;
                     }
 

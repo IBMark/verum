@@ -95,8 +95,7 @@ fn decide_all(ir: &Ir) -> Vec<(usize, CallTarget)> {
     // Receiver-aware indexes: methods keyed by parent class then method name
     // (nested so lookups work with a borrowed `&str`, no per-lookup String),
     // and classes by short name (for `new Class` / `Class::method`).
-    let mut method_by_parent: FxHashMap<SymbolId, FxHashMap<&str, SymbolId>> =
-        FxHashMap::default();
+    let mut method_by_parent: FxHashMap<SymbolId, FxHashMap<&str, SymbolId>> = FxHashMap::default();
     let mut class_by_name: FxHashMap<&str, Vec<SymbolId>> = FxHashMap::default();
 
     for (id, sym) in &ordered {
