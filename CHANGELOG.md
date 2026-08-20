@@ -4,6 +4,33 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **The test-coverage score dimension no longer reports 100 unconditionally.** A
+  repository without a single test used to score full marks on it. It is now
+  driven by static test-reachability: 0 when no test suite is found, rising
+  linearly to 100 at 35% of shipped functions reachable from a test (calibrated
+  against the pinned corpus, where well-tested repos measure 11-35%). The
+  dimension is reported but stays out of the weighted `overall`, so no existing
+  score moves.
+
+### Added
+- Line-of-code metrics in `report`: total, code, comment and blank lines per
+  file, rolled up per language and per top-level directory, with an nyc-style
+  per-file table in the markdown report and a `loc` section in the JSON.
+- Static test-reachability in `report` and `audit`: which functions the test
+  suite provably reaches through the resolved call graph, per file and overall,
+  and the files that no test reaches at all. This is reachability, not coverage -
+  it is an estimate of what the tests can reach, never a claim about what ran.
+  Exposed as a `test_reachability` section in the JSON report.
+- `verum report --coverage <file>` ingests measured coverage from an `lcov` file
+  a real test run produced (`DA`/`FN`/`FNDA` records). The measured numbers are
+  reported as measured, appear as `measured_coverage` in the JSON, and replace
+  the static reachability estimate in the score dimension. A file that does not
+  parse fails loudly with the offending line, rather than reading as zero
+  coverage. Verum still never runs tests and never emits coverage data.
+
 ## [0.1.5] - 2026-08-19
 
 ### Changed

@@ -74,6 +74,30 @@ fixes it would apply - symbols with no caller, duplicate bodies to remap - and
 identifies each by file and line. It runs report-only and does not modify your
 files; treat its output as a worklist to apply by hand.
 
+## Lines of code and test reachability
+
+`report` counts every file - total, code, comment and blank lines - and rolls
+the counts up per language and per top-level directory. Alongside them it walks
+the resolved call graph from the test suite and reports, per file and overall,
+how many functions a test provably reaches, plus the files that no test reaches
+at all.
+
+That number is **reachability, not coverage**. It says what the tests demonstrably
+reach by name; it cannot see code driven through trait dispatch, generics or
+macros, and a reachable function need not actually run. Verum never runs your
+tests and never invents a coverage figure.
+
+When you have measured coverage, hand it over and it supersedes the estimate:
+
+```
+verum report . --coverage lcov.info
+```
+
+The file is read in `lcov` format (`DA`/`FN`/`FNDA` records, as written by
+`cargo llvm-cov --lcov`, `nyc`, `pytest-cov` or `gcov`). The measured numbers
+appear in the report labelled as measured and replace reachability in the score.
+A coverage file that does not parse is an error, never a silent zero.
+
 ## Continuous integration
 
 `verum gate <path>` exits `1` when the deploy-gate thresholds fail and `0` when

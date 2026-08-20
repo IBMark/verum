@@ -6,9 +6,12 @@ pub mod dead_code;
 pub mod deps;
 pub mod duplicates;
 pub mod infrastructure;
+pub mod lcov;
+pub mod loc;
 pub mod naming;
 pub mod performance;
 pub mod rbac;
+pub mod reachability;
 pub mod rust_insights;
 pub mod scan;
 pub mod scoring;
@@ -88,6 +91,40 @@ pub fn is_auxiliary_path(path: &str) -> bool {
         ".generated.",
     ];
     FILE_MARKERS.iter().any(|m| path.contains(m))
+}
+
+/// True for files that are part of a test suite, as opposed to the wider set
+/// of non-shipped files [`is_auxiliary_path`] covers (which also sweeps up
+/// vendored dependencies, examples and build output - none of which are
+/// tests).
+///
+/// This is the narrow sibling of [`is_auxiliary_path`], sharing its
+/// whole-segment matching so a leading or trailing `tests/` counts the same as
+/// a nested `/tests/`, and its `tests/fixtures` carve-out: Verum's own suite
+/// points the analyzer at fixture trees as real targets, and a fixture tree
+/// that classified as its own test suite would report a meaningless 100%.
+///
+/// Used to seed the roots of the static test-reachability walk, so a false
+/// positive here inflates reachability - the reason it lists only markers that
+/// unambiguously name a test.
+pub fn is_test_path(path: &str) -> bool {
+    if path.contains("tests/fixtures") {
+        return false;
+    }
+    const DIR_SEGMENTS: &[&str] = &["test", "tests", "__tests__", "spec", "specs"];
+    if path
+        .split(['/', '\\'])
+        .any(|seg| DIR_SEGMENTS.contains(&seg))
+    {
+        return true;
+    }
+    const FILE_MARKERS: &[&str] = &["_test.", ".test.", ".spec.", "_spec."];
+    let file_name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    FILE_MARKERS.iter().any(|m| file_name.contains(m))
+        // pytest's convention, anchored to the start so `latest_build.py` is
+        // not a test.
+        || file_name.starts_with("test_")
+        || file_name == "conftest.py"
 }
 
 /// Infrastructure and compliance findings describe a deployed artifact, not
@@ -208,6 +245,11 @@ pub struct PrismResult {
     pub auto_fixable: Vec<Finding>,
     pub ai_review: Vec<Finding>,
     pub human_review: Vec<Finding>,
+    /// Line counts per file, language and top-level directory.
+    pub loc: loc::LocReport,
+    /// What the test suite could reach, statically. Not coverage - see
+    /// [`reachability`].
+    pub test_reachability: reachability::TestReachability,
 }
 
 pub struct Prism;
@@ -268,6 +310,10 @@ impl Prism {
         let mut rbac_f: Vec<Finding> = Vec::new();
         let mut infrastructure_f: Vec<Finding> = Vec::new();
         let mut chains_f: Vec<Finding> = Vec::new();
+        // Measurements rather than findings: they produce no `Finding`s, so
+        // they merge into their own slots and never touch the finding order.
+        let mut loc_r = loc::LocReport::default();
+        let mut reachability_r = reachability::TestReachability::default();
 
         let scan_ctx_ref = &scan_ctx;
         rayon::scope(|s| {
@@ -307,6 +353,8 @@ impl Prism {
             // K8s/Docker/Terraform findings come pre-built from the atlas phase.
             s.spawn(|_| infrastructure_f = prof!("infrastructure", infrastructure::analyse(ir)));
             s.spawn(|_| chains_f = prof!("chains", chains::analyse(ir)));
+            s.spawn(|_| loc_r = prof!("loc", loc::analyse(ir, scan_ctx_ref, root)));
+            s.spawn(|_| reachability_r = prof!("reachability", reachability::analyse(ir, root)));
         });
 
         let (dup_findings, dup_groups) = duplicates_r;
@@ -348,7 +396,7 @@ impl Prism {
         let mut seen = HashSet::new();
         findings.retain(|f| seen.insert((format!("{:?}", f.kind), f.file.clone(), f.line_start)));
 
-        let score = scoring::compute(ir, &findings);
+        let score = scoring::compute(ir, &findings, &reachability_r);
 
         let mut auto_fixable = Vec::new();
         let mut ai_review = Vec::new();
@@ -371,6 +419,8 @@ impl Prism {
             auto_fixable,
             ai_review,
             human_review,
+            loc: loc_r,
+            test_reachability: reachability_r,
         })
     }
 }

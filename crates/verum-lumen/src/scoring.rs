@@ -1,5 +1,34 @@
 use verum_nucleus::{Finding, FindingKind, Ir, Score, Severity};
 
+use crate::lcov::MeasuredCoverage;
+use crate::reachability::TestReachability;
+
+/// Static test-reachability at which the test-reachability dimension reaches
+/// 100, as a percentage of shipped functions.
+///
+/// Calibrated, not guessed. Reachability is counted only along *resolved* call
+/// edges, so it measures the evidence Verum can actually see, and that ceiling
+/// is well below 100%: a suite that drives code through trait dispatch,
+/// generics or derive macros leaves no statically resolvable edge from the
+/// test to the function it exercises. Measured over the corpus at the pinned
+/// commits, on repositories nobody would call untested:
+///
+/// ```text
+///   clap    35.2%     ripgrep 27.0%     tokio 20.8%
+///   fd      19.0%     rayon   11.6%     serde  0.2%
+/// ```
+///
+/// `rayon` and `serde` sit at the bottom for the reason above - almost every
+/// call into them is trait- or macro-dispatched - which is exactly why a
+/// measured coverage file, when one exists, supersedes this estimate entirely
+/// (see [`measured_dimension`]).
+///
+/// The target is set at the top of that band, so a repository whose tests
+/// demonstrably reach a third of its functions scores full marks and one whose
+/// tests reach nothing scores zero. This is a floor on evidence, never a
+/// verdict on a test suite.
+pub const REACHABILITY_TARGET_PERCENT: f32 = 35.0;
+
 /// Density at which a size-sensitive penalty reaches its maximum: findings of
 /// that class touching 10% of the codebase's symbols is already a pervasive,
 /// structural problem, so nothing is gained by letting the count run further.
@@ -40,15 +69,57 @@ fn density_penalty(count: usize, symbols: usize, max_penalty: u8) -> u8 {
     scaled.min(max_penalty as f32).round() as u8
 }
 
+/// Score the static test-reachability of a tree, 0..=100.
+///
+/// The mapping is a documented straight line: no tests at all is 0, and the
+/// score rises linearly with the fraction of shipped functions a test can
+/// reach until it saturates at [`REACHABILITY_TARGET_PERCENT`].
+///
+/// ```text
+///   0% reachable ->   0        17.5% ->  50        35%+ -> 100
+/// ```
+///
+/// The dimension this feeds used to be hardcoded to 100, so a repository with
+/// no tests whatsoever reported perfect test coverage. It is a *reachability*
+/// number, not a coverage number: it says what the suite could possibly
+/// exercise, not what it did. [`measured_dimension`] replaces it whenever a
+/// real coverage file is supplied.
+pub fn reachability_dimension(reachability: &TestReachability) -> u8 {
+    // No tests found is 0 outright, not a rounding of some small percentage:
+    // the honest answer to "how well tested is this?" is "not at all".
+    if reachability.test_roots == 0 {
+        return 0;
+    }
+    let ratio = (reachability.percent / REACHABILITY_TARGET_PERCENT).min(1.0);
+    (ratio * 100.0).round() as u8
+}
+
+/// Score measured coverage, 0..=100, from a real coverage run.
+///
+/// Line coverage, used directly. A measured percentage is already the answer
+/// and needs no calibration curve - the ramp in [`reachability_dimension`]
+/// exists only to compensate for a static walk seeing less than a running
+/// test does. Measured data always wins: it is the ground truth the static
+/// estimate is trying to approximate.
+pub fn measured_dimension(coverage: &MeasuredCoverage) -> u8 {
+    coverage.line_percent.round().clamp(0.0, 100.0) as u8
+}
+
 /// Turn findings into per-dimension scores and a capped overall.
-pub fn compute(ir: &Ir, findings: &[Finding]) -> Score {
+///
+/// `reachability` supplies the test-reachability dimension. It is reported but
+/// deliberately left out of the weighted `overall` - the same set of
+/// dimensions carries the headline as before, so adding this measurement moves
+/// no existing score. Folding it in is a separate, deliberately breaking
+/// re-weighting.
+pub fn compute(ir: &Ir, findings: &[Finding], reachability: &TestReachability) -> Score {
     let mut score = Score {
         security: 100,
         architecture: 100,
         performance: 100,
         naming: 100,
         complexity: 100,
-        test_coverage: 100,
+        test_coverage: reachability_dimension(reachability),
         ui_consistency: 100,
         journey_coverage: 100,
         visual_accuracy: 100,
@@ -307,6 +378,25 @@ mod tests {
         }
     }
 
+    /// A tree in which no test suite was found at all.
+    fn untested() -> TestReachability {
+        TestReachability {
+            functions: 10,
+            ..Default::default()
+        }
+    }
+
+    /// A tree whose tests reach `percent` of its functions.
+    fn reaching(percent: f32) -> TestReachability {
+        TestReachability {
+            test_roots: 5,
+            functions: 100,
+            reachable: percent.round() as usize,
+            percent,
+            ..Default::default()
+        }
+    }
+
     fn ir_with_symbols(n: usize) -> Ir {
         let mut ir = Ir::new();
         for i in 0..n {
@@ -344,7 +434,7 @@ mod tests {
         // would still land in the 90s. The cap must force <= 79.
         let ir = ir_with_symbols(50);
         let findings = vec![finding(FindingKind::SqlInjection, Severity::Critical)];
-        let score = compute(&ir, &findings);
+        let score = compute(&ir, &findings, &untested());
         assert!(score.overall <= 79, "got {}", score.overall);
     }
 
@@ -352,7 +442,7 @@ mod tests {
     fn one_high_caps_at_89() {
         let ir = ir_with_symbols(50);
         let findings = vec![finding(FindingKind::PathTraversal, Severity::High)];
-        let score = compute(&ir, &findings);
+        let score = compute(&ir, &findings, &untested());
         assert!(score.overall <= 89, "got {}", score.overall);
     }
 
@@ -365,7 +455,7 @@ mod tests {
             finding(FindingKind::DangerousChain, Severity::High),
             finding(FindingKind::BlockingInAsync, Severity::Medium),
         ];
-        let score = compute(&ir, &findings);
+        let score = compute(&ir, &findings, &untested());
         assert!(
             score.overall > 89,
             "informational should not cap, got {}",
@@ -376,7 +466,7 @@ mod tests {
     #[test]
     fn clean_codebase_stays_high() {
         let ir = ir_with_symbols(50);
-        let score = compute(&ir, &[]);
+        let score = compute(&ir, &[], &untested());
         assert_eq!(score.overall, 100);
     }
 
@@ -393,8 +483,8 @@ mod tests {
         // 40,000-symbol workspace. Under the old count-based penalty both
         // pinned complexity to its 50 floor.
         let findings = repeat(FindingKind::LongFunction, Severity::Medium, 40);
-        let small = compute(&ir_with_symbols(400), &findings);
-        let large = compute(&ir_with_symbols(40_000), &findings);
+        let small = compute(&ir_with_symbols(400), &findings, &untested());
+        let large = compute(&ir_with_symbols(40_000), &findings, &untested());
         assert!(
             large.complexity > small.complexity,
             "density should favour the larger codebase: small {} large {}",
@@ -416,10 +506,12 @@ mod tests {
         let small = compute(
             &ir_with_symbols(1_000),
             &repeat(FindingKind::HighComplexity, Severity::Medium, 20),
+            &untested(),
         );
         let large = compute(
             &ir_with_symbols(10_000),
             &repeat(FindingKind::HighComplexity, Severity::Medium, 200),
+            &untested(),
         );
         assert_eq!(small.complexity, large.complexity);
         assert_eq!(small.overall, large.overall);
@@ -434,7 +526,7 @@ mod tests {
         let mut findings = repeat(FindingKind::LongFunction, Severity::Medium, 40);
         findings.extend(repeat(FindingKind::ExactDuplicate, Severity::Low, 20));
         findings.extend(repeat(FindingKind::ConventionViolation, Severity::Low, 20));
-        let score = compute(&ir_with_symbols(200), &findings);
+        let score = compute(&ir_with_symbols(200), &findings, &untested());
         assert_eq!(score.complexity, 50);
         assert_eq!(score.naming, 60);
         assert_eq!(score.architecture, 70);
@@ -445,8 +537,8 @@ mod tests {
         // A single duplicate in a five-symbol crate is not a 20%-duplicated
         // codebase. The denominator floor keeps the penalty proportionate.
         let findings = repeat(FindingKind::ExactDuplicate, Severity::Low, 1);
-        let tiny = compute(&ir_with_symbols(5), &findings);
-        let floored = compute(&ir_with_symbols(MIN_SIZE_BASIS), &findings);
+        let tiny = compute(&ir_with_symbols(5), &findings, &untested());
+        let floored = compute(&ir_with_symbols(MIN_SIZE_BASIS), &findings, &untested());
         assert_eq!(tiny.architecture, floored.architecture);
         assert_eq!(tiny.architecture, 97);
     }
@@ -458,5 +550,62 @@ mod tests {
         assert_eq!(density_penalty(usize::MAX, 1, 30), 30);
         assert_eq!(density_penalty(1_000_000, 10, 50), 50);
         assert_eq!(density_penalty(0, 10_000, 50), 0);
+    }
+
+    #[test]
+    fn a_repo_with_no_tests_no_longer_scores_full_marks() {
+        // The regression this dimension exists for: it was hardcoded to 100,
+        // so a codebase without a single test reported perfect test coverage.
+        let score = compute(&ir_with_symbols(50), &[], &untested());
+        assert_eq!(score.test_coverage, 0);
+    }
+
+    #[test]
+    fn a_well_reached_repo_scores_high() {
+        // `clap` at the pinned corpus commit reaches 35.2% of its functions.
+        assert_eq!(reachability_dimension(&reaching(35.2)), 100);
+        assert_eq!(reachability_dimension(&reaching(90.0)), 100);
+        // `ripgrep`, 27.0%.
+        assert!(reachability_dimension(&reaching(27.0)) >= 75);
+    }
+
+    #[test]
+    fn the_reachability_ramp_is_linear_up_to_the_target() {
+        assert_eq!(reachability_dimension(&reaching(0.0)), 0);
+        assert_eq!(reachability_dimension(&reaching(17.5)), 50);
+        assert_eq!(reachability_dimension(&reaching(8.75)), 25);
+    }
+
+    #[test]
+    fn tests_that_reach_almost_nothing_score_almost_nothing() {
+        // `serde`'s macro-dispatched suite resolves to 0.2% of its
+        // functions; a token suite must not read as a tested codebase.
+        assert!(
+            reachability_dimension(&reaching(1.0)) <= 5,
+            "a token test suite is not coverage"
+        );
+        assert_eq!(reachability_dimension(&reaching(0.2)), 1);
+    }
+
+    #[test]
+    fn the_test_dimension_does_not_move_the_overall() {
+        // Reporting the number honestly must not silently re-weight every
+        // existing score; folding it into `overall` is a separate decision.
+        let ir = ir_with_symbols(50);
+        let untested_score = compute(&ir, &[], &untested());
+        let tested_score = compute(&ir, &[], &reaching(100.0));
+        assert_eq!(untested_score.test_coverage, 0);
+        assert_eq!(tested_score.test_coverage, 100);
+        assert_eq!(untested_score.overall, tested_score.overall);
+    }
+
+    #[test]
+    fn measured_coverage_is_used_as_measured() {
+        let coverage = MeasuredCoverage {
+            line_percent: 83.4,
+            ..Default::default()
+        };
+        assert_eq!(measured_dimension(&coverage), 83);
+        assert_eq!(measured_dimension(&MeasuredCoverage::default()), 0);
     }
 }

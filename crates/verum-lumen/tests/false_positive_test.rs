@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use verum_lumen::{is_auxiliary_path, Standard};
+use verum_lumen::{is_auxiliary_path, is_test_path, Standard};
 use verum_nucleus::{FindingKind, Ir, Language};
 
 fn go_hooks_ir() -> Ir {
@@ -47,6 +47,45 @@ fn auxiliary_paths_are_classified() {
         "tests/fixtures/php_security/vulnerable.php",
     ] {
         assert!(!is_auxiliary_path(real), "{real} should not be auxiliary");
+    }
+}
+
+#[test]
+fn test_paths_are_the_narrow_subset_of_auxiliary_paths() {
+    // Seeds the reachability walk: a false positive here would credit a
+    // vendored or example file as if it were a test.
+    for test in [
+        "tests/suite.rs",
+        "src/__tests__/foo.ts",
+        "app/spec/user_spec.rb",
+        "a/b/foo_test.go",
+        "a/b/foo.spec.ts",
+        "pkg/test_helpers.py",
+        "conftest.py",
+    ] {
+        assert!(is_test_path(test), "{test} should be a test path");
+    }
+    for not_test in [
+        "src/lib.rs",
+        // Auxiliary, but not a test suite.
+        "pkg/examples/demo.go",
+        "vendor/lib/x.php",
+        "web/node_modules/y.js",
+        "benches/throughput.rs",
+        // `latest_*` must not trip pytest's `test_` prefix.
+        "src/latest_build.py",
+        // Verum's own fixture trees are analysis targets, not a suite.
+        "tests/fixtures/php_security/vulnerable.php",
+    ] {
+        assert!(
+            !is_test_path(not_test),
+            "{not_test} should not be a test path"
+        );
+    }
+    // Every test path that is not a deliberate fixture target is also
+    // auxiliary - the two filters must not disagree about what ships.
+    for test in ["tests/suite.rs", "src/__tests__/foo.ts", "a/b/foo_test.go"] {
+        assert!(is_auxiliary_path(test), "{test} should also be auxiliary");
     }
 }
 

@@ -66,6 +66,12 @@ enum Commands {
         /// Write the report to a file instead of stdout
         #[arg(long)]
         out: Option<PathBuf>,
+        /// Ingest measured coverage from an lcov file (e.g. lcov.info) that a
+        /// test run already produced. Verum never runs tests or produces
+        /// coverage itself; supplied data is reported as measured and replaces
+        /// the static test-reachability estimate in the score.
+        #[arg(long, value_name = "FILE")]
+        coverage: Option<PathBuf>,
     },
 
     /// Map the system: module & symbol graphs, data flows, cycles, routes
@@ -111,7 +117,12 @@ async fn main() -> Result<()> {
         Commands::Full { path, dry_run } => cmd_full(&path, dry_run).await,
         Commands::Gate { path } => cmd_gate(&path).await,
         Commands::Baseline { path } => cmd_baseline(&path).await.map(|_| true),
-        Commands::Report { path, format, out } => cmd_report(&path, &format, out.as_deref())
+        Commands::Report {
+            path,
+            format,
+            out,
+            coverage,
+        } => cmd_report(&path, &format, out.as_deref(), coverage.as_deref())
             .await
             .map(|_| true),
         Commands::Map {
@@ -783,6 +794,23 @@ fn print_audit_results(result: &PrismResult) {
                 chains.len() - 12
             );
         }
+    }
+
+    // Test reachability: stated as reachability, never as coverage. A tree
+    // with no test suite says so in as many words - it used to score a silent
+    // 100 on the test dimension.
+    let reach = &result.test_reachability;
+    if reach.test_roots == 0 {
+        println!("  {}  Tests:        none found in this tree", "✗".red());
+    } else if reach.functions > 0 {
+        println!(
+            "  {}  Test reach:   {}/{} functions ({:.1}%), {} files reach none",
+            "->".cyan(),
+            reach.reachable,
+            reach.functions,
+            reach.percent,
+            reach.files_without_reachable_functions.len()
+        );
     }
 
     println!();
@@ -1575,12 +1603,224 @@ struct ReportData {
     endpoints: ReportEndpoints,
 }
 
-async fn cmd_report(path: &Path, format: &str, out: Option<&Path>) -> Result<()> {
+/// How many per-file rows the markdown report prints before summarising the
+/// rest. A ten-thousand-file monorepo would otherwise bury every other section
+/// under its own file list; the complete table is always in the JSON report.
+const MAX_FILE_ROWS: usize = 200;
+
+/// Line counts: the two rollups, then the per-file table.
+fn write_loc_section(
+    md: &mut String,
+    loc: &verum_lumen::loc::LocReport,
+    reachability: &verum_lumen::reachability::TestReachability,
+) -> Result<()> {
+    use std::fmt::Write;
+
+    writeln!(md, "\n## Lines of code")?;
+    writeln!(md, "\n### By language")?;
+    writeln!(md, "| Language | Files | Lines | Code | Comments | Blank |")?;
+    writeln!(md, "|----------|------:|------:|-----:|---------:|------:|")?;
+    for rollup in loc.by_language.iter().chain(std::iter::once(&loc.totals)) {
+        writeln!(
+            md,
+            "| {} | {} | {} | {} | {} | {} |",
+            rollup.key, rollup.files, rollup.total, rollup.code, rollup.comment, rollup.blank
+        )?;
+    }
+
+    writeln!(md, "\n### By top-level directory")?;
+    writeln!(
+        md,
+        "| Directory | Files | Lines | Code | Comments | Blank |"
+    )?;
+    writeln!(
+        md,
+        "|-----------|------:|------:|-----:|---------:|------:|"
+    )?;
+    for rollup in &loc.by_directory {
+        writeln!(
+            md,
+            "| {} | {} | {} | {} | {} | {} |",
+            rollup.key, rollup.files, rollup.total, rollup.code, rollup.comment, rollup.blank
+        )?;
+    }
+
+    // Reachability is reported for shipped code only, so a test or vendored
+    // file has line counts but no function columns - shown as `-` rather than
+    // as a zero that would read as "nothing here is tested".
+    let by_path: std::collections::HashMap<&str, &verum_lumen::reachability::FileReachability> =
+        reachability
+            .files
+            .iter()
+            .map(|f| (f.path.as_str(), f))
+            .collect();
+
+    writeln!(md, "\n### By file")?;
+    writeln!(
+        md,
+        "| File | Lines | Code | Comments | Funcs | Test-reach% |"
+    )?;
+    writeln!(
+        md,
+        "|------|------:|-----:|---------:|------:|------------:|"
+    )?;
+    for file in loc.files.iter().take(MAX_FILE_ROWS) {
+        let (funcs, reach) = match by_path.get(file.path.as_str()) {
+            Some(entry) => (entry.functions.to_string(), format!("{:.1}", entry.percent)),
+            None => ("-".to_string(), "-".to_string()),
+        };
+        writeln!(
+            md,
+            "| {} | {} | {} | {} | {} | {} |",
+            file.path, file.total, file.code, file.comment, funcs, reach
+        )?;
+    }
+    if loc.files.len() > MAX_FILE_ROWS {
+        writeln!(
+            md,
+            "\n_{} more files - the complete table is in `--format json`._",
+            loc.files.len() - MAX_FILE_ROWS
+        )?;
+    }
+    Ok(())
+}
+
+/// Static test-reachability, stated as what it is and is not.
+fn write_reachability_section(
+    md: &mut String,
+    reachability: &verum_lumen::reachability::TestReachability,
+) -> Result<()> {
+    use std::fmt::Write;
+
+    writeln!(md, "\n## Test reachability (static)")?;
+    writeln!(
+        md,
+        "\nWhat the test suite provably reaches through the resolved call \
+         graph. This is an estimate, not measured coverage: a reachable \
+         function need not actually run, and code a test drives through trait \
+         dispatch or a macro leaves no edge to follow and reads as unreached. \
+         Supply `--coverage <lcov>` for measured numbers."
+    )?;
+    writeln!(md, "\n- Test roots: {}", reachability.test_roots)?;
+    writeln!(
+        md,
+        "- Functions in shipped code: {}",
+        reachability.functions
+    )?;
+    writeln!(
+        md,
+        "- Reachable from a test: {} ({:.1}%)",
+        reachability.reachable, reachability.percent
+    )?;
+    if reachability.test_roots == 0 {
+        writeln!(md, "- **No test suite was found in this tree.**")?;
+    }
+
+    let zero = &reachability.files_without_reachable_functions;
+    writeln!(
+        md,
+        "\n### Files with zero test-reachable functions ({})",
+        zero.len()
+    )?;
+    if zero.is_empty() {
+        writeln!(md, "\n_None - every file with functions can be reached._")?;
+    } else {
+        for file in zero.iter().take(MAX_FILE_ROWS) {
+            writeln!(md, "- `{}`", file)?;
+        }
+        if zero.len() > MAX_FILE_ROWS {
+            writeln!(md, "- _...and {} more_", zero.len() - MAX_FILE_ROWS)?;
+        }
+    }
+    Ok(())
+}
+
+/// Measured coverage, ingested from a coverage file the user's own test run
+/// produced. Labelled measured everywhere so it is never read as an estimate.
+fn write_measured_section(
+    md: &mut String,
+    coverage: &verum_lumen::lcov::MeasuredCoverage,
+) -> Result<()> {
+    use std::fmt::Write;
+
+    writeln!(md, "\n## Measured coverage")?;
+    writeln!(
+        md,
+        "\nMeasured by a real test run and read from `{}` ({} format). Verum \
+         did not run any tests.",
+        coverage.source, coverage.format
+    )?;
+    writeln!(
+        md,
+        "\n- Lines: {}/{} ({:.1}%)",
+        coverage.lines_hit, coverage.lines_found, coverage.line_percent
+    )?;
+    writeln!(
+        md,
+        "- Functions: {}/{} ({:.1}%)",
+        coverage.functions_hit, coverage.functions_found, coverage.function_percent
+    )?;
+    writeln!(md, "\n| File | Lines | Covered | Line% | Func% |")?;
+    writeln!(md, "|------|------:|--------:|------:|------:|")?;
+    for file in coverage.files.iter().take(MAX_FILE_ROWS) {
+        writeln!(
+            md,
+            "| {} | {} | {} | {:.1} | {:.1} |",
+            file.path, file.lines_found, file.lines_hit, file.line_percent, file.function_percent
+        )?;
+    }
+    if coverage.files.len() > MAX_FILE_ROWS {
+        writeln!(
+            md,
+            "\n_{} more files - the complete table is in `--format json`._",
+            coverage.files.len() - MAX_FILE_ROWS
+        )?;
+    }
+    Ok(())
+}
+
+/// The JSON report: everything `PipelineResult` has always carried, flattened
+/// at the top level so no existing field moves or is renamed, plus the
+/// measurement sections. `measured_coverage` is absent unless `--coverage`
+/// supplied a real coverage file.
+#[derive(serde::Serialize)]
+struct ReportJson<'a> {
+    #[serde(flatten)]
+    pipeline: PipelineResult,
+    loc: &'a verum_lumen::loc::LocReport,
+    test_reachability: &'a verum_lumen::reachability::TestReachability,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    measured_coverage: Option<&'a verum_lumen::lcov::MeasuredCoverage>,
+}
+
+async fn cmd_report(
+    path: &Path,
+    format: &str,
+    out: Option<&Path>,
+    coverage: Option<&Path>,
+) -> Result<()> {
     let config = make_atlas_config(path);
     let root_display = config.root.to_string_lossy().into_owned();
     let standard = load_standard_from_file(path);
     let ir = Atlas::new(config).build()?;
-    let result = Prism::analyse_at(&ir, &standard, Some(path))?;
+    let mut result = Prism::analyse_at(&ir, &standard, Some(path))?;
+
+    // A real coverage run beats a static estimate: when the user hands us
+    // measured data, it replaces test-reachability in the score dimension. A
+    // file that fails to parse is an error - reporting 0% because a path was
+    // wrong would be worse than saying nothing.
+    let measured = match coverage {
+        Some(file) => {
+            let text = std::fs::read_to_string(file)
+                .with_context(|| format!("Failed to read coverage file {}", file.display()))?;
+            let parsed = verum_lumen::lcov::parse(&text, &display_path(file))
+                .map_err(|e| anyhow::anyhow!("{} is not a valid lcov file: {e}", file.display()))?;
+            result.score.test_coverage = verum_lumen::scoring::measured_dimension(&parsed);
+            Some(parsed)
+        }
+        None => None,
+    };
+
     let (gate_passed, gate_reasons) = check_deploy_gate(path, &result.score, &result);
 
     let rendered = match format {
@@ -1600,7 +1840,16 @@ async fn cmd_report(path: &Path, format: &str, out: Option<&Path>) -> Result<()>
                 deploy_gate_passed: gate_passed,
                 deploy_gate_reasons: gate_reasons,
             };
-            serde_json::to_string_pretty(&pipeline_result)?
+            // Flattened, so every field the JSON report has always carried
+            // stays exactly where consumers expect it and the new sections are
+            // purely additive.
+            let json = ReportJson {
+                pipeline: pipeline_result,
+                loc: &result.loc,
+                test_reachability: &result.test_reachability,
+                measured_coverage: measured.as_ref(),
+            };
+            serde_json::to_string_pretty(&json)?
         }
         "html" => {
             let dup_groups: Vec<ReportDupGroup> = result
@@ -1756,6 +2005,20 @@ async fn cmd_report(path: &Path, format: &str, out: Option<&Path>) -> Result<()>
                 "| Infrastructure | {}/100 |",
                 result.score.infrastructure
             )?;
+            writeln!(
+                md,
+                "| {} | {}/100 |",
+                match measured {
+                    Some(_) => "Test coverage (measured)",
+                    None => "Test reachability (static)",
+                },
+                result.score.test_coverage
+            )?;
+            write_loc_section(&mut md, &result.loc, &result.test_reachability)?;
+            write_reachability_section(&mut md, &result.test_reachability)?;
+            if let Some(measured) = &measured {
+                write_measured_section(&mut md, measured)?;
+            }
             writeln!(md, "\n## Findings ({})", result.findings.len())?;
             for f in &result.findings {
                 writeln!(
