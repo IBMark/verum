@@ -1583,25 +1583,64 @@ async fn cmd_report(path: &Path, format: &str, out: Option<&Path>) -> Result<()>
     let result = Prism::analyse_at(&ir, &standard, Some(path))?;
     let (gate_passed, gate_reasons) = check_deploy_gate(path, &result.score, &result);
 
-    let rendered = match format {
-        "json" => {
-            let pipeline_result = PipelineResult {
-                score_before: result.score.clone(),
-                score_after: result.score.clone(),
-                lines_before: ir.metadata.total_lines,
-                lines_after: ir.metadata.total_lines,
-                passes: 0,
-                findings: result.findings.clone(),
-                auto_fixed: 0,
-                ai_decisions: 0,
-                human_review: result.human_review.len(),
-                duplicate_groups: result.duplicate_groups.clone(),
-                duration_ms: ir.metadata.build_time_ms,
-                deploy_gate_passed: gate_passed,
-                deploy_gate_reasons: gate_reasons,
-            };
-            serde_json::to_string_pretty(&pipeline_result)?
+    // The JSON report over a large tree runs to hundreds of MB. Rendering it
+    // into one in-memory String and then writing that out serializes the data
+    // twice (format, then copy) and doubles peak memory, so this arm streams
+    // straight to the destination instead: a BufWriter over the file with
+    // --out, locked stdout otherwise. Bytes are identical to the String path -
+    // to_writer_pretty and to_string_pretty share the same formatter.
+    if format == "json" {
+        let profile = std::env::var("VERUM_PROFILE").is_ok();
+        let started = std::time::Instant::now();
+        let pipeline_result = PipelineResult {
+            score_before: result.score.clone(),
+            score_after: result.score,
+            lines_before: ir.metadata.total_lines,
+            lines_after: ir.metadata.total_lines,
+            passes: 0,
+            auto_fixed: 0,
+            ai_decisions: 0,
+            human_review: result.human_review.len(),
+            findings: result.findings,
+            duplicate_groups: result.duplicate_groups,
+            duration_ms: ir.metadata.build_time_ms,
+            deploy_gate_passed: gate_passed,
+            deploy_gate_reasons: gate_reasons,
+        };
+        match out {
+            Some(out_path) => {
+                let file = std::fs::File::create(out_path)
+                    .with_context(|| format!("Failed to write {}", out_path.display()))?;
+                let mut writer = std::io::BufWriter::with_capacity(1 << 20, file);
+                serde_json::to_writer_pretty(&mut writer, &pipeline_result)
+                    .with_context(|| format!("Failed to write {}", out_path.display()))?;
+                std::io::Write::flush(&mut writer)
+                    .with_context(|| format!("Failed to write {}", out_path.display()))?;
+                if profile {
+                    eprintln!(
+                        "  report json stream   {:>6.2}s",
+                        started.elapsed().as_secs_f64()
+                    );
+                }
+                println!(
+                    "  {}  Report written to {}",
+                    "✓".green(),
+                    out_path.display()
+                );
+            }
+            None => {
+                // `println!("{rendered}")` appended a newline; keep it.
+                let stdout = std::io::stdout();
+                let mut writer = std::io::BufWriter::with_capacity(1 << 20, stdout.lock());
+                serde_json::to_writer_pretty(&mut writer, &pipeline_result)?;
+                std::io::Write::write_all(&mut writer, b"\n")?;
+                std::io::Write::flush(&mut writer)?;
+            }
         }
+        return Ok(());
+    }
+
+    let rendered = match format {
         "html" => {
             let dup_groups: Vec<ReportDupGroup> = result
                 .duplicate_groups
