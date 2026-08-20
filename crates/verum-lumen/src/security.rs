@@ -1,5 +1,3 @@
-use std::io::BufRead;
-
 use rayon::prelude::*;
 use regex::Regex;
 
@@ -266,7 +264,23 @@ fn classify_weak_crypto_severity(line: &str) -> Severity {
 }
 
 /// Pattern-based scan of file contents plus taint-path findings.
+///
+/// Reads every file itself; prefer [`analyse_with_context`] when a pre-read
+/// [`ScanContext`](crate::scan::ScanContext) is already available.
 pub fn analyse(ir: &Ir, config: &SecurityConfig) -> Vec<Finding> {
+    analyse_with_context(ir, config, &crate::scan::ScanContext::index_only(ir))
+}
+
+/// Pattern-based scan over the shared [`ScanContext`](crate::scan::ScanContext)
+/// lines, so the tree is read once for all line-scanning passes instead of
+/// once per pass. Findings are identical to [`analyse`]: the context's line
+/// splitting matches the `std::fs::read` + `BufRead::lines` shape this pass
+/// used to do itself.
+pub fn analyse_with_context(
+    ir: &Ir,
+    config: &SecurityConfig,
+    ctx: &crate::scan::ScanContext,
+) -> Vec<Finding> {
     let mut findings = Vec::new();
 
     // `[:=]` covers PHP/Go/Rust assignments, JS object literals, Python dicts
@@ -336,16 +350,12 @@ pub fn analyse(ir: &Ir, config: &SecurityConfig) -> Vec<Finding> {
                 return findings;
             }
 
-            let content = match std::fs::read(path) {
-                Ok(c) => c,
-                Err(_) => return findings,
+            let Some(lines) = ctx.lines(path) else {
+                return findings;
             };
 
-            for (line_idx, line_result) in content.lines().enumerate() {
-                let line = match line_result {
-                    Ok(l) => l,
-                    Err(_) => continue,
-                };
+            for (line_idx, line) in lines.iter().enumerate() {
+                let line = line.as_str();
                 let line_num = (line_idx + 1) as u32;
 
                 // md5 and sha1 are checked independently so a line containing both

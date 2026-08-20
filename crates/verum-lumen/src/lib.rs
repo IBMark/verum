@@ -240,12 +240,13 @@ impl Prism {
             }};
         }
 
-        // `taint`, `rust_insights` and `transport` are all line scanners over
-        // the same tree, and each derived the same two things per file: the
-        // file's lines, and the symbols declared in it. Do both once here - the
-        // read in parallel, the symbol lookup as a single index - so the passes
-        // share them instead of each re-reading the tree and rescanning every
-        // symbol per file.
+        // `taint`, `rust_insights`, `transport`, `security` and
+        // `crate_semantics` are all line scanners over the same tree, and each
+        // derived the same two things per file: the file's lines, and the
+        // symbols declared in it. Do both once here - the read in parallel,
+        // the symbol lookup as a single index - so the passes share them
+        // instead of each re-reading the tree and rescanning every symbol per
+        // file.
         let scan_ctx = prof!("scan_context", scan::ScanContext::build(ir));
 
         // Every pass below reads only (&Ir, &Standard, &ScanContext, root), so
@@ -278,14 +279,27 @@ impl Prism {
                 }
             });
             s.spawn(|_| {
-                crate_semantics_f = prof!("crate_semantics", crate_semantics::analyse(ir, root))
+                crate_semantics_f = prof!(
+                    "crate_semantics",
+                    crate_semantics::analyse_with_context(ir, root, scan_ctx_ref)
+                )
             });
             s.spawn(|_| {
                 dead_code_f = prof!("dead_code", dead_code::analyse(ir, &standard.dead_code))
             });
             s.spawn(|_| duplicates_r = prof!("duplicates", duplicates::analyse(ir)));
-            s.spawn(|_| security_f = prof!("security", security::analyse(ir, &standard.security)));
-            s.spawn(|_| crypto_hygiene_f = prof!("crypto_hygiene", crypto_hygiene::analyse(ir)));
+            s.spawn(|_| {
+                security_f = prof!(
+                    "security",
+                    security::analyse_with_context(ir, &standard.security, scan_ctx_ref)
+                )
+            });
+            s.spawn(|_| {
+                crypto_hygiene_f = prof!(
+                    "crypto_hygiene",
+                    crypto_hygiene::analyse_with_context(ir, scan_ctx_ref)
+                )
+            });
             s.spawn(|_| taint_f = prof!("taint", taint::analyse_with_context(ir, scan_ctx_ref).0));
             s.spawn(|_| naming_f = prof!("naming", naming::analyse(ir, &standard.naming)));
             s.spawn(|_| complexity_f = prof!("complexity", complexity::analyse(ir, standard)));
