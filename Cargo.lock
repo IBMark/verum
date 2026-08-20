@@ -1950,7 +1950,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "verum"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -1973,7 +1973,7 @@ dependencies = [
 
 [[package]]
 name = "verum-arbiter"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "reqwest",
@@ -1988,7 +1988,7 @@ dependencies = [
 
 [[package]]
 name = "verum-faber"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "serde",
@@ -2003,7 +2003,7 @@ dependencies = [
 
 [[package]]
 name = "verum-lumen"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "ahash",
  "anyhow",
@@ -2019,7 +2019,7 @@ dependencies = [
 
 [[package]]
 name = "verum-mappa"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "ahash",
  "anyhow",
@@ -2046,7 +2046,7 @@ dependencies = [
 
 [[package]]
 name = "verum-nucleus"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "ahash",
  "anyhow",

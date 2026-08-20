@@ -4,9 +4,59 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.6] - 2026-08-20
+
+### Added
+- **`verum check` - the machine verdict.** One command shaped for a tool loop:
+  analyse and print a single JSON verdict (`pass`, severity counts, findings
+  each carrying a one-sentence `why` and a concrete `fix_hint`) with stable
+  exit codes (0 pass, 1 fail at/above `--fail-on`, 2 operational error).
+  Fix hints for dead code and duplicates come from the fix planner's actual
+  plan (symbol, exact lines, safe-to-delete verdict); every other kind has a
+  concrete remediation template. ~0.2s on a 56k-line tree. With `VERUM_STATS=1`,
+  one local JSON line per invocation (never code text) is appended to
+  `$VERUM_STATS_FILE` for adoption metrics.
+- **Stable finding fingerprints.** Every finding carries a `fingerprint` -
+  a stable hash of kind, repo-relative path, symbol, and digit-stripped
+  message - that survives edits elsewhere in the file and the repo living at
+  a different path. Also emitted as SARIF `partialFingerprints`.
+- **Baseline mode.** `gate --baseline` and `report --baseline` compare against
+  a previous report (or the minimal file `verum baseline` writes) by
+  fingerprint and partition findings into new/existing/resolved; the gate then
+  fails only on new High/Critical findings, so a legacy codebase can adopt the
+  gate without first fixing its inherited debt. Missing or corrupt baselines
+  are loud errors, never an empty comparison.
+- **Inline suppressions.** `verum:ignore` / `verum:ignore[Kind,...] reason` on
+  the finding line or the line above waives it, per language comment syntax.
+  Suppressed findings leave the score and gate but are counted
+  (`suppressed_count`, `--show-suppressed`), and a suppression that matches
+  nothing becomes a Low `StaleSuppression` finding so waivers cannot rot.
+- Fuzzing harnesses for every language front-end (13 libFuzzer targets, seed
+  corpora committed, opt-in via `cargo fuzz`, not part of default builds).
+- CI now builds and tests on macOS and Windows alongside Linux.
 
 ### Fixed
+- **`gate` and `check` fail closed on an empty analysis.** An unreadable,
+  empty, or mistyped path used to analyse zero files, score 100, and pass -
+  so a typo'd hook path waved every change through. Zero analysable files is
+  now an operational error.
+- Robustness against hostile input, ahead of scanning untrusted repositories
+  at scale: a file that panics an extractor or analysis pass becomes a Low
+  `ParseFailure` diagnostic instead of killing the run; recursive AST walks
+  are depth-capped so pathological nesting cannot overflow the stack (a 10k-
+  paren expression aborted the process before); overlong generated lines and
+  unbounded tracked state are cut off by fixed, deterministic input-size
+  limits - never wall-clock timeouts. Two fuzzer-found crashes fixed (a
+  malformed Rust use-group slice panic, an inverted-span underflow in the
+  line passes), each with its reproducer committed as a seed and a regression
+  test.
+- Path matching is now separator-portable: every `/`-delimited path check
+  (vendored-code exclusion, test-file detection, the auto-fix delete guard,
+  framework entry-point detection) normalizes `\` first, so Windows analyses
+  match Linux instead of silently skipping the checks.
+- Go generic calls (`GetState[T](x)`, `pkg.Fn[T](x)`) now produce call edges;
+  functions only ever invoked through generic instantiation were reported
+  dead. On the corpus this removes two long-standing false positives in fiber.
 - **The test-coverage score dimension no longer reports 100 unconditionally.** A
   repository without a single test used to score full marks on it. It is now
   driven by static test-reachability: 0 when no test suite is found, rising
@@ -55,6 +105,25 @@ All notable changes to this project are documented here. The format is based on
   the static reachability estimate in the score dimension. A file that does not
   parse fails loudly with the offending line, rather than reading as zero
   coverage. Verum still never runs tests and never emits coverage data.
+
+### Changed
+- Dependencies moved to current majors, most notably tree-sitter 0.26 with the
+  current grammar releases for all seven languages. Corpus-verified: findings
+  byte-identical on 21 of 22 pinned repos; the 22nd only improves (the Go
+  generics fix above).
+
+### Performance
+- Roughly 3x faster and 38% less peak memory than 0.1.5 on large trees (ruff:
+  ~6.8s to ~2.3s, 1.10GB to 0.68GB), from an audited set of algorithmic fixes:
+  chains precomputes per-edge sink/gate classification instead of recomputing
+  it five million times, duplicates sorts its call-site buckets once instead
+  of per member, per-file regexes are compiled once, the resolver memoizes
+  repeated (name, file) lookups and drops SipHash for FxHash, the independent
+  analysis passes run concurrently, the tree is walked once (gitignore-aware,
+  with early binary/size skips) and read once, release builds use thin LTO,
+  and the JSON report streams to its destination instead of building a
+  hundreds-of-MB String first. Output byte-identical throughout, verified
+  against golden reports and the corpus after every step.
 
 ## [0.1.5] - 2026-08-19
 
@@ -158,6 +227,8 @@ False positives found by running the analyzer across ~90 real-world repositories
   dependency audit, and infrastructure checks.
 - Three surfaces: the `verum` CLI, a library facade, and an MCP server.
 
+[0.1.6]: https://github.com/IBMark/verum/releases/tag/v0.1.6
+[0.1.5]: https://github.com/IBMark/verum/releases/tag/v0.1.5
 [0.1.4]: https://github.com/IBMark/verum/releases/tag/v0.1.4
 [0.1.3]: https://github.com/IBMark/verum/releases/tag/v0.1.3
 [0.1.2]: https://github.com/IBMark/verum/releases/tag/v0.1.2
