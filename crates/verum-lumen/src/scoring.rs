@@ -355,6 +355,8 @@ fn is_informational(kind: &FindingKind) -> bool {
             // A parse isolated after a panic is a diagnostic about the run,
             // not a defect in the code under audit: no penalty, no cap.
             | FindingKind::ParseFailure
+            // A stale suppression is comment hygiene, not a code defect.
+            | FindingKind::StaleSuppression
     )
 }
 

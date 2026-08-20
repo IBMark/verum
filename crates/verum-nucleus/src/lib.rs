@@ -417,6 +417,12 @@ pub enum FindingKind {
     /// source locations and formatting that vary across rustc versions, and
     /// identical inputs must produce byte-identical findings.
     ParseFailure,
+    /// A `verum:ignore` comment that suppresses nothing: no finding exists on
+    /// its line or the line below, or its `[Kind,...]` filter names kinds
+    /// that do not occur there. Suppressions must not rot silently - a stale
+    /// one either documents a fixed issue (delete it) or, worse, sits ready
+    /// to swallow the next real finding at that spot.
+    StaleSuppression,
 }
 
 impl FindingKind {
@@ -489,6 +495,7 @@ impl FindingKind {
             FindingKind::NonConstantTimeComparison => "NonConstantTimeComparison",
             FindingKind::StaticAeadNonce => "StaticAeadNonce",
             FindingKind::ParseFailure => "ParseFailure",
+            FindingKind::StaleSuppression => "StaleSuppression",
         }
     }
 }

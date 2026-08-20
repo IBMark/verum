@@ -387,3 +387,173 @@ fn a_corrupt_baseline_is_a_loud_error_not_an_empty_one() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("has no fingerprint"));
 }
+
+// ---------------------------------------------------------------------------
+// Inline suppressions
+// ---------------------------------------------------------------------------
+
+/// (kind, basename, line) triples for a findings array, sorted.
+fn kind_locations(findings: &serde_json::Value) -> Vec<(String, String, u64)> {
+    let mut rows: Vec<(String, String, u64)> = findings
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .map(|f| {
+            let file = f["file"].as_str().expect("file");
+            let base = file.rsplit('/').next().unwrap_or(file).to_string();
+            (
+                f["kind"].as_str().expect("kind").to_string(),
+                base,
+                f["line_start"].as_u64().expect("line"),
+            )
+        })
+        .collect();
+    rows.sort();
+    rows
+}
+
+#[test]
+fn each_comment_family_suppresses_and_the_report_counts_them() {
+    let report = report_over(&fixture("gate_kit/suppressed"));
+
+    // `#` above the line, `#` trailing, `//` above, `/* */` above - all four
+    // deliberate suppressions took effect.
+    assert_eq!(report["suppressed_count"], 4);
+    let kept = kind_locations(&report["findings"]);
+    assert!(
+        !kept.iter().any(
+            |(kind, file, _)| (kind == "WeakCrypto" && file == "app.py") || kind == "EvalUsage"
+        ),
+        "suppressed findings must leave the findings list: {kept:?}"
+    );
+
+    // Without --show-suppressed the individual findings are not listed...
+    assert!(report.get("suppressed").is_none());
+
+    // ...with it, they are, each with its identity intact.
+    let shown = report_json(&[
+        "report",
+        fixture("gate_kit/suppressed").to_str().unwrap(),
+        "--format",
+        "json",
+        "--show-suppressed",
+    ]);
+    let listed = kind_locations(&shown["suppressed"]);
+    assert_eq!(
+        listed,
+        vec![
+            ("EvalUsage".into(), "app.js".into(), 3),
+            ("EvalUsage".into(), "app.js".into(), 8),
+            ("EvalUsage".into(), "app.py".into(), 10),
+            ("WeakCrypto".into(), "app.py".into(), 6),
+        ]
+    );
+    for f in shown["suppressed"].as_array().unwrap() {
+        assert_eq!(f["fingerprint"].as_str().unwrap().len(), 16);
+    }
+}
+
+#[test]
+fn a_normal_comment_never_suppresses() {
+    // normal.py has an ordinary comment directly above its md5 finding; the
+    // finding must survive.
+    let report = report_over(&fixture("gate_kit/suppressed"));
+    let kept = kind_locations(&report["findings"]);
+    assert!(
+        kept.contains(&("WeakCrypto".to_string(), "normal.py".to_string(), 5)),
+        "kept: {kept:?}"
+    );
+}
+
+#[test]
+fn a_stale_suppression_becomes_a_low_finding() {
+    // stale.py's ignore names SqlInjection but the line below has WeakCrypto:
+    // the comment suppresses nothing, the finding survives, and the rot is
+    // reported.
+    let report = report_over(&fixture("gate_kit/suppressed"));
+    let kept = kind_locations(&report["findings"]);
+    assert!(kept.contains(&("StaleSuppression".to_string(), "stale.py".to_string(), 3)));
+    assert!(kept.contains(&("WeakCrypto".to_string(), "stale.py".to_string(), 4)));
+
+    let stale = report["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["kind"] == "StaleSuppression")
+        .expect("stale finding");
+    assert_eq!(stale["severity"], "Low");
+    assert!(stale["message"]
+        .as_str()
+        .unwrap()
+        .contains("verum:ignore[SqlInjection]"));
+    assert_eq!(stale["fingerprint"].as_str().unwrap().len(), 16);
+}
+
+#[test]
+fn a_tree_without_ignore_comments_reports_zero_suppressed() {
+    let report = report_over(&fixture("gate_kit/v1"));
+    assert_eq!(report["suppressed_count"], 0);
+    assert!(report.get("suppressed").is_none());
+    assert!(
+        !report["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["kind"] == "StaleSuppression"),
+        "no comments, no stale diagnostics"
+    );
+}
+
+#[test]
+fn gate_show_suppressed_lists_the_waived_findings() {
+    let output = run_verum(&[
+        "gate",
+        fixture("gate_kit/suppressed").to_str().unwrap(),
+        "--show-suppressed",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Suppressed findings (4)"),
+        "stdout: {stdout}"
+    );
+    assert!(stdout.contains("EvalUsage"));
+    assert!(stdout.contains("Stale suppressions: 1"));
+}
+
+#[test]
+fn suppressed_findings_and_stale_diagnostics_are_baseline_transparent() {
+    // Baseline the suppressed tree, then gate the same tree against it: the
+    // remaining real Criticals are waived, the suppressed ones are absent,
+    // and the Low StaleSuppression is neither baselined nor gate-relevant -
+    // the gate must pass.
+    let dir = ScratchDir::new("suppress-gate");
+    let baseline = dir.path().join("baseline.json");
+    let output = run_verum(&[
+        "baseline",
+        fixture("gate_kit/suppressed").to_str().unwrap(),
+        "--out",
+        baseline.to_str().unwrap(),
+    ]);
+    assert!(output.status.success());
+
+    // The baseline records no StaleSuppression entries.
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&baseline).unwrap()).unwrap();
+    assert!(!doc["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|f| f["kind"] == "StaleSuppression"));
+
+    let gate = run_verum(&[
+        "gate",
+        fixture("gate_kit/suppressed").to_str().unwrap(),
+        "--baseline",
+        baseline.to_str().unwrap(),
+    ]);
+    assert!(
+        gate.status.success(),
+        "same tree vs its own baseline must pass: {}",
+        String::from_utf8_lossy(&gate.stdout)
+    );
+}

@@ -21,6 +21,7 @@ pub mod rust_insights;
 pub mod scan;
 pub mod scoring;
 pub mod security;
+pub mod suppress;
 pub mod taint;
 pub mod transport;
 
@@ -169,6 +170,10 @@ fn kind_survives_in_auxiliary(kind: &FindingKind) -> bool {
             // suppressing it in a vendored or test file would hide that the
             // scan of that file is incomplete.
             | FindingKind::ParseFailure
+            // A stale `verum:ignore` is a fact about the suppression comment,
+            // and it can only arise in a file that already surfaces findings;
+            // hiding it in auxiliary files would let suppressions rot there.
+            | FindingKind::StaleSuppression
     )
 }
 
@@ -270,6 +275,10 @@ pub struct PrismResult {
     /// What the test suite could reach, statically. Not coverage - see
     /// [`reachability`].
     pub test_reachability: reachability::TestReachability,
+    /// Findings removed by inline `verum:ignore` comments (see [`suppress`]).
+    /// Kept out of `findings`, the score, and the gate, but reported so
+    /// `--show-suppressed` can list them and counts stay honest.
+    pub suppressed: Vec<Finding>,
 }
 
 pub struct Prism;
@@ -434,10 +443,30 @@ impl Prism {
         let mut seen = HashSet::new();
         findings.retain(|f| seen.insert((format!("{:?}", f.kind), f.file.clone(), f.line_start)));
 
+        // Inline `verum:ignore` suppressions: a cheap post-pass over only the
+        // files that have findings (their lines are already in the scan
+        // context). Suppressed findings leave the list before scoring; a
+        // suppression that matched nothing comes back as a Low
+        // StaleSuppression finding, re-sorted into the same global order. On
+        // a tree with no `verum:ignore` comments this is a no-op.
+        let outcome = suppress::apply(findings, &scan_ctx);
+        let suppressed = outcome.suppressed;
+        findings = outcome.kept;
+        if !outcome.stale.is_empty() {
+            findings.extend(outcome.stale);
+            findings.sort_by(|a, b| {
+                (&a.file, a.line_start, &a.id).cmp(&(&b.file, b.line_start, &b.id))
+            });
+        }
+
         // Stable identities for baseline matching, assigned over the final
         // sorted order so the occurrence index is reproducible. Purely
         // additive: no finding is added, removed, or reordered by this.
+        // Suppressed findings get theirs separately - they are listed with
+        // `--show-suppressed` and deserve an identity there too.
         fingerprint::assign(&mut findings, ir, root);
+        let mut suppressed = suppressed;
+        fingerprint::assign(&mut suppressed, ir, root);
 
         let score = scoring::compute(ir, &findings, &reachability_r);
 
@@ -464,6 +493,7 @@ impl Prism {
             human_review,
             loc: loc_r,
             test_reachability: reachability_r,
+            suppressed,
         })
     }
 }

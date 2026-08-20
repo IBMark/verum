@@ -60,6 +60,9 @@ enum Commands {
         /// legacy codebase can gate new work without first fixing history.
         #[arg(long, value_name = "FILE")]
         baseline: Option<PathBuf>,
+        /// List the findings removed by inline `verum:ignore` comments
+        #[arg(long)]
+        show_suppressed: bool,
     },
 
     /// Snapshot current findings to verum.baseline.json so `gate` only fails
@@ -92,6 +95,10 @@ enum Commands {
         /// count of findings both runs share.
         #[arg(long, value_name = "FILE")]
         baseline: Option<PathBuf>,
+        /// Include the findings removed by inline `verum:ignore` comments
+        /// (markdown section / `suppressed` array in the JSON report)
+        #[arg(long)]
+        show_suppressed: bool,
     },
 
     /// Map the system: module & symbol graphs, data flows, cycles, routes
@@ -135,7 +142,11 @@ async fn main() -> Result<()> {
         Commands::Audit { path } => cmd_audit(&path).await.map(|_| true),
         Commands::Clean { path, dry_run } => cmd_clean(&path, dry_run).await.map(|_| true),
         Commands::Full { path, dry_run } => cmd_full(&path, dry_run).await,
-        Commands::Gate { path, baseline } => cmd_gate(&path, baseline.as_deref()).await,
+        Commands::Gate {
+            path,
+            baseline,
+            show_suppressed,
+        } => cmd_gate(&path, baseline.as_deref(), show_suppressed).await,
         Commands::Baseline { path, out } => cmd_baseline(&path, out.as_deref()).await.map(|_| true),
         Commands::Report {
             path,
@@ -143,12 +154,14 @@ async fn main() -> Result<()> {
             out,
             coverage,
             baseline,
+            show_suppressed,
         } => cmd_report(
             &path,
             &format,
             out.as_deref(),
             coverage.as_deref(),
             baseline.as_deref(),
+            show_suppressed,
         )
         .await
         .map(|_| true),
@@ -780,6 +793,38 @@ fn print_audit_results(result: &PrismResult) {
         }
     }
 
+    // Findings removed by inline `verum:ignore` comments: out of the list,
+    // the score and the gate, but never silently - the count always shows.
+    if !result.suppressed.is_empty() {
+        println!(
+            "  {}  Suppressed:   {} finding(s) via verum:ignore (--show-suppressed lists them)",
+            "->".cyan(),
+            result.suppressed.len()
+        );
+    }
+
+    // `verum:ignore` comments that suppressed nothing.
+    let stale: Vec<&Finding> = result
+        .findings
+        .iter()
+        .filter(|f| f.kind == FindingKind::StaleSuppression)
+        .collect();
+    if !stale.is_empty() {
+        println!("  {}  Stale suppressions: {}", "⚠".yellow(), stale.len());
+        for f in stale.iter().take(10) {
+            println!(
+                "     {} {}:{} -- {}",
+                "⚠".yellow(),
+                display_path(&f.file),
+                f.line_start,
+                f.message
+            );
+        }
+        if stale.len() > 10 {
+            println!("     ... {} more (see report)", stale.len() - 10);
+        }
+    }
+
     // Test reachability: stated as reachability, never as coverage. A tree
     // with no test suite says so in as many words - it used to score a silent
     // 100 on the test dimension.
@@ -806,6 +851,31 @@ fn print_audit_results(result: &PrismResult) {
         format!("{}/100", result.score.overall).red()
     };
     println!("  Score: {}", score_color);
+}
+
+/// The `--show-suppressed` listing: every finding an inline `verum:ignore`
+/// removed, with the fingerprint so it can be cross-referenced or baselined.
+fn print_suppressed(suppressed: &[Finding]) {
+    if suppressed.is_empty() {
+        return;
+    }
+    println!();
+    println!(
+        "  {}  Suppressed findings ({})",
+        "->".cyan(),
+        suppressed.len()
+    );
+    for f in suppressed {
+        println!(
+            "     {} {}: {} -- {}:{} [{}]",
+            "·".dimmed(),
+            severity_label(&f.severity),
+            finding_kind_label(&f.kind),
+            display_path(&f.file),
+            f.line_start,
+            f.fingerprint,
+        );
+    }
 }
 
 pub(crate) fn load_standard_from_file(root: &Path) -> Standard {
@@ -1282,7 +1352,11 @@ async fn cmd_full(path: &Path, _dry_run: bool) -> Result<bool> {
     Ok(gate_passed)
 }
 
-async fn cmd_gate(path: &Path, baseline_file: Option<&Path>) -> Result<bool> {
+async fn cmd_gate(
+    path: &Path,
+    baseline_file: Option<&Path>,
+    show_suppressed: bool,
+) -> Result<bool> {
     println!();
 
     let pb = make_spinner("Running audit for deploy gate...");
@@ -1293,6 +1367,9 @@ async fn cmd_gate(path: &Path, baseline_file: Option<&Path>) -> Result<bool> {
     pb.finish_and_clear();
 
     print_audit_results(&result);
+    if show_suppressed {
+        print_suppressed(&result.suppressed);
+    }
     println!();
 
     // Explicit baseline: fail ONLY on findings the baseline does not know,
@@ -1513,6 +1590,9 @@ fn is_baselineable(f: &Finding) -> bool {
         && !is_rust_insight(&f.kind)
         && f.kind != FindingKind::CrateApiMisuse
         && f.kind != FindingKind::ParseFailure
+        // Stale-suppression diagnostics describe a comment, not the code;
+        // baselining one would waive the very rot signal it exists to raise.
+        && f.kind != FindingKind::StaleSuppression
 }
 
 /// The auto-loaded `verum.baseline.json` next to the analysed tree, in either
@@ -2015,6 +2095,12 @@ struct ReportJson<'a> {
     /// against the supplied baseline, by fingerprint.
     #[serde(skip_serializing_if = "Option::is_none")]
     baseline: Option<BaselineSection>,
+    /// How many findings inline `verum:ignore` comments removed from
+    /// `findings`. Always present so a zero is visible.
+    suppressed_count: usize,
+    /// The suppressed findings themselves, only with `--show-suppressed`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    suppressed: Option<&'a [Finding]>,
 }
 
 async fn cmd_report(
@@ -2023,6 +2109,7 @@ async fn cmd_report(
     out: Option<&Path>,
     coverage: Option<&Path>,
     baseline: Option<&Path>,
+    show_suppressed: bool,
 ) -> Result<()> {
     let config = make_atlas_config(path);
     let root_display = config.root.to_string_lossy().into_owned();
@@ -2094,6 +2181,8 @@ async fn cmd_report(
             test_reachability: &result.test_reachability,
             measured_coverage: measured.as_ref(),
             baseline: baseline_diff,
+            suppressed_count: result.suppressed.len(),
+            suppressed: show_suppressed.then_some(result.suppressed.as_slice()),
         };
         match out {
             Some(out_path) => {
@@ -2326,6 +2415,28 @@ async fn cmd_report(
                     display_path(&f.file),
                     f.line_start
                 )?;
+            }
+            if !result.suppressed.is_empty() {
+                writeln!(
+                    md,
+                    "\n## Suppressed by verum:ignore ({})",
+                    result.suppressed.len()
+                )?;
+                if show_suppressed {
+                    for f in &result.suppressed {
+                        writeln!(
+                            md,
+                            "- **{:?}** {:?}: {} ({}:{})",
+                            f.severity,
+                            f.kind,
+                            f.message,
+                            display_path(&f.file),
+                            f.line_start
+                        )?;
+                    }
+                } else {
+                    writeln!(md, "\n_Run with `--show-suppressed` to list them._")?;
+                }
             }
             md
         }
