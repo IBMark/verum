@@ -1,22 +1,28 @@
 //! Crypto hygiene: two local, syntactic checks for classic AEAD/MAC misuses.
 //!
 //! Detectors:
-//! - [`FindingKind::NonConstantTimeComparison`]: `==`/`!=` used to compare a
+//! - [`FindingKind::NonConstantTimeComparison`]: `==`/`!=` (and, in
+//!   JavaScript/TypeScript, `===`/`!==`) used to compare a
 //!   security-sensitive value (an HMAC, signature, secret, digest, or a
 //!   compound like `auth_tag`/`access_token`) instead of a constant-time
 //!   comparison. A
 //!   naive `==` on a byte value short-circuits at the first mismatching byte,
 //!   leaking timing information an attacker can use to forge the value
-//!   byte-by-byte.
+//!   byte-by-byte. Runs over Rust, Python, JavaScript, and TypeScript files;
+//!   the JS/TS variant splits camelCase identifiers so `computedSignature`
+//!   carries the same signal as `computed_signature`.
 //! - [`FindingKind::StaticAeadNonce`]: a constant/hardcoded nonce or IV
 //!   reaching an AEAD `.encrypt(`/`.seal(` call, or a `Nonce` built directly
 //!   from a literal byte array. Reusing a nonce under the same key breaks
 //!   confidentiality (and, for most AEAD modes, integrity) of every message
 //!   encrypted under it.
 //!
-//! Both are heuristic string/regex matching over the IR's Rust files, tuned
-//! to stay quiet on the idiomatic-safe forms: `ct_eq`/`subtle::ConstantTimeEq`
-//! comparisons, and a nonce buffer filled from a CSPRNG before use.
+//! Both are heuristic string/regex matching over the IR's files (the nonce
+//! detector is Rust-only; the comparison detector also covers Python,
+//! JavaScript, and TypeScript), tuned to stay quiet on the idiomatic-safe
+//! forms: `ct_eq`/`subtle::ConstantTimeEq`/`hmac.compare_digest`/
+//! `crypto.timingSafeEqual` comparisons, and a nonce buffer filled from a
+//! CSPRNG before use.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -74,6 +80,40 @@ const SAFE_COMPARISON_MARKERS: &[&str] = &[
     "constant_time_eq",
     "subtle::",
     "ring::constant_time",
+    // Python / JavaScript constant-time idioms.
+    "compare_digest",
+    "timingSafeEqual",
+    "constant_time_compare",
+    "hash_equals(",
+    "safeCompare",
+    "secureCompare",
+];
+
+/// Trailing identifier components that mark metadata *about* a sensitive
+/// value rather than the value itself: `signature.length == 64` or
+/// `digest_size == 32` compare public quantities, not secret bytes.
+const METADATA_TAIL_WORDS: &[&str] = &[
+    "len",
+    "length",
+    "size",
+    "count",
+    "bytes",
+    "type",
+    "kind",
+    "name",
+    "id",
+    "alg",
+    "algorithm",
+    "scheme",
+    "version",
+    "index",
+    "offset",
+    "mode",
+    "method",
+    "format",
+    "label",
+    "prefix",
+    "suffix",
 ];
 
 /// Sinks where a nonce/IV value is consumed by an AEAD encrypt operation, or
@@ -119,20 +159,25 @@ pub fn analyse(ir: &Ir) -> Vec<Finding> {
 pub fn analyse_with_context(ir: &Ir, ctx: &crate::scan::ScanContext) -> Vec<Finding> {
     let mut findings = Vec::new();
 
-    let mut files: Vec<PathBuf> = ir
+    let mut files: Vec<(PathBuf, Language)> = ir
         .files
         .iter()
-        .filter(|(_, info)| info.language == Language::Rust)
-        .map(|(p, _)| p.clone())
+        .filter(|(_, info)| {
+            matches!(
+                info.language,
+                Language::Rust | Language::Python | Language::JavaScript | Language::TypeScript
+            )
+        })
+        .map(|(p, info)| (p.clone(), info.language.clone()))
         .collect();
-    files.sort();
+    files.sort_by(|a, b| a.0.cmp(&b.0));
 
     // Each file is analysed independently; results are collected per file and
     // flattened in the pre-sorted file order so the output sequence never
     // depends on thread scheduling (the trailing sort then normalizes fully).
     let per_file: Vec<Vec<Finding>> = files
         .par_iter()
-        .map(|path| {
+        .map(|(path, language)| {
             let file_findings = Vec::new();
             let path_str = matchable_path(path);
             if path_str.contains("/target/")
@@ -143,7 +188,12 @@ pub fn analyse_with_context(ir: &Ir, ctx: &crate::scan::ScanContext) -> Vec<Find
             }
             // Real test code exercises fixtures deliberately; skip it (but not
             // fixtures-under-tests, which are analysis targets).
-            if (path_str.contains("/tests/") || path_str.ends_with("_test.rs"))
+            if (path_str.contains("/tests/")
+                || path_str.contains("/test/")
+                || path_str.contains("/__tests__/")
+                || path_str.contains(".test.")
+                || path_str.contains(".spec.")
+                || path_str.ends_with("_test.rs"))
                 && !path_str.contains("fixtures")
             {
                 return file_findings;
@@ -157,7 +207,7 @@ pub fn analyse_with_context(ir: &Ir, ctx: &crate::scan::ScanContext) -> Vec<Find
             // the panic guard and downgrade a panic to a diagnostic finding.
             match verum_nucleus::panic_guard::catch(|| {
                 let mut file_findings = Vec::new();
-                analyse_file(path, lines.as_ref(), &mut file_findings);
+                analyse_file(path, language, lines.as_ref(), &mut file_findings);
                 file_findings
             }) {
                 Some(file_findings) => file_findings,
@@ -176,11 +226,22 @@ pub fn analyse_with_context(ir: &Ir, ctx: &crate::scan::ScanContext) -> Vec<Find
     findings
 }
 
-fn analyse_file(path: &Path, lines: &[String], findings: &mut Vec<Finding>) {
+fn analyse_file(path: &Path, language: &Language, lines: &[String], findings: &mut Vec<Finding>) {
     // Inline #[cfg(test)] items are test scaffolding - and, in this crate's
     // own source, hold fixture source text as string literals that would
     // otherwise self-trigger these detectors. Blank them out before scanning.
-    let test_ranges = crate::rust_insights::cfg_test_ranges(lines);
+    // (Rust only - the other languages keep their test files out via the
+    // path skip above and the auxiliary-path filter downstream.)
+    let is_rust = *language == Language::Rust;
+    let test_ranges = if is_rust {
+        crate::rust_insights::cfg_test_ranges(lines)
+    } else {
+        Vec::new()
+    };
+    let comment_marker = match language {
+        Language::Python => "#",
+        _ => "//",
+    };
     let code_lines: Vec<String> = lines
         .iter()
         .enumerate()
@@ -196,20 +257,27 @@ fn analyse_file(path: &Path, lines: &[String], findings: &mut Vec<Finding>) {
             {
                 String::new()
             } else {
-                strip_line_comment(l)
+                strip_line_comment(l, comment_marker)
             }
         })
         .collect();
 
-    detect_non_constant_time_comparison(path, &code_lines, findings);
-    detect_static_nonce(path, &code_lines, findings);
+    // camelCase word-splitting only where camelCase is the identifier
+    // convention: in Rust, camel-cased names are types (`HmacKey`), which
+    // are deliberately not treated as sensitive values.
+    let camel = matches!(language, Language::JavaScript | Language::TypeScript);
+    detect_non_constant_time_comparison(path, &code_lines, camel, findings);
+    if is_rust {
+        detect_static_nonce(path, &code_lines, findings);
+    }
 }
 
-/// Detector 1: `==`/`!=` comparing a security-sensitive identifier, outside
-/// the recognized safe (constant-time) forms.
+/// Detector 1: `==`/`!=` (and JS `===`/`!==`) comparing a security-sensitive
+/// identifier, outside the recognized safe (constant-time) forms.
 fn detect_non_constant_time_comparison(
     path: &Path,
     code_lines: &[String],
+    camel: bool,
     findings: &mut Vec<Finding>,
 ) {
     let mut flagged_lines: HashSet<u32> = HashSet::new();
@@ -235,7 +303,7 @@ fn detect_non_constant_time_comparison(
             {
                 continue;
             }
-            if left == "None" || right == "None" {
+            if is_absent_literal(&left) || is_absent_literal(&right) {
                 continue;
             }
             if is_some_pattern(&left) || is_some_pattern(&right) {
@@ -247,10 +315,15 @@ fn detect_non_constant_time_comparison(
             if is_enum_variant_path(&left) || is_enum_variant_path(&right) {
                 continue;
             }
+            // A numeric literal on either side compares a public quantity
+            // (a length, a version, a threshold), never secret bytes.
+            if is_numeric_literal(&left) || is_numeric_literal(&right) {
+                continue;
+            }
             if left.contains("is_empty") || right.contains("is_empty") {
                 continue;
             }
-            if !identifier_is_sensitive(&left) && !identifier_is_sensitive(&right) {
+            if !identifier_is_sensitive(&left, camel) && !identifier_is_sensitive(&right, camel) {
                 continue;
             }
 
@@ -361,18 +434,28 @@ fn nonce_decl_regex() -> &'static Regex {
     })
 }
 
-/// Byte positions and text of every `==`/`!=` in `line`.
+/// Byte positions and text of every `==`/`!=` (and JS `===`/`!==`) in `line`.
 fn comparison_ops(line: &str) -> Vec<(usize, &'static str)> {
     let bytes = line.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
     while i + 1 < bytes.len() {
         if bytes[i] == b'=' && bytes[i + 1] == b'=' {
-            out.push((i, "=="));
-            i += 2;
+            if i + 2 < bytes.len() && bytes[i + 2] == b'=' {
+                out.push((i, "==="));
+                i += 3;
+            } else {
+                out.push((i, "=="));
+                i += 2;
+            }
         } else if bytes[i] == b'!' && bytes[i + 1] == b'=' {
-            out.push((i, "!="));
-            i += 2;
+            if i + 2 < bytes.len() && bytes[i + 2] == b'=' {
+                out.push((i, "!=="));
+                i += 3;
+            } else {
+                out.push((i, "!="));
+                i += 2;
+            }
         } else {
             i += 1;
         }
@@ -397,6 +480,8 @@ fn operand_before(line: &str, pos: usize) -> String {
 }
 
 /// The identifier-ish token immediately after byte offset `pos` in `line`.
+/// A trailing `:` (Python's block colon in `if x == None:`) is not part of
+/// the token.
 fn operand_after(line: &str, pos: usize) -> String {
     let tail = line[pos..].trim_start();
     let bytes = tail.as_bytes();
@@ -409,7 +494,7 @@ fn operand_after(line: &str, pos: usize) -> String {
             break;
         }
     }
-    tail[..end].to_string()
+    tail[..end].trim_end_matches(':').to_string()
 }
 
 fn preceding_is_string_literal(line: &str, pos: usize) -> bool {
@@ -427,7 +512,22 @@ fn is_some_pattern(token: &str) -> bool {
 }
 
 fn is_bool_literal(token: &str) -> bool {
-    token == "true" || token == "false"
+    token == "true" || token == "false" || token == "True" || token == "False"
+}
+
+/// Rust's `None`, JS's `null`/`undefined`, Python's `None`: comparing against
+/// absence is a presence check, not a byte-level value comparison.
+fn is_absent_literal(token: &str) -> bool {
+    token == "None" || token == "null" || token == "undefined"
+}
+
+/// A purely numeric token (`64`, `0x1F`, `0.5`): a public quantity.
+fn is_numeric_literal(token: &str) -> bool {
+    !token.is_empty()
+        && token
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() || matches!(c, '.' | 'x' | '_'))
+        && token.chars().next().is_some_and(|c| c.is_ascii_digit())
 }
 
 /// True for a path like `Status::Active` or `crate::Status::Active` - a
@@ -444,19 +544,24 @@ fn is_enum_variant_path(token: &str) -> bool {
 }
 
 /// True when `token` names a security-sensitive value: one of its
-/// `.`/`_`/`:`-delimited components is a whole-word match against
-/// [`SENSITIVE_WORDS`], two adjacent components form a [`SENSITIVE_PAIRS`]
-/// compound, or it is a `*_hash` identifier of a secret (e.g.
-/// `password_hash`) rather than a content hash.
-fn identifier_is_sensitive(token: &str) -> bool {
+/// `.`/`_`/`:`-delimited (and, with `camel`, camelCase) components is a
+/// whole-word match against [`SENSITIVE_WORDS`], two adjacent components form
+/// a [`SENSITIVE_PAIRS`] compound, or it is a `*_hash` identifier of a secret
+/// (e.g. `password_hash`) rather than a content hash. An identifier whose
+/// last component is metadata (`signature.length`, `digest_size`) names a
+/// public quantity about the value, not the value, and is never sensitive.
+fn identifier_is_sensitive(token: &str, camel: bool) -> bool {
     if token.is_empty() {
         return false;
     }
-    let lower = token.to_ascii_lowercase();
-    let words: Vec<&str> = lower
-        .split(['.', '_', ':'])
-        .filter(|w| !w.is_empty())
-        .collect();
+    let words = identifier_components(token, camel);
+    let words: Vec<&str> = words.iter().map(|w| w.as_str()).collect();
+    if words
+        .last()
+        .is_some_and(|w| METADATA_TAIL_WORDS.contains(w))
+    {
+        return false;
+    }
     if words.iter().any(|w| SENSITIVE_WORDS.contains(w)) {
         return true;
     }
@@ -467,6 +572,34 @@ fn identifier_is_sensitive(token: &str) -> bool {
         return true;
     }
     words.last() == Some(&"hash") && words.iter().any(|w| HASH_SECRET_PREFIXES.contains(w))
+}
+
+/// The lowercased components of an identifier token: split on `.`/`_`/`:`
+/// always, and additionally on lower-to-upper camelCase boundaries when
+/// `camel` is set, so `computedSignature` yields `computed`/`signature` while
+/// Rust's `HmacKey` (a type name) stays one word.
+fn identifier_components(token: &str, camel: bool) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut cur = String::new();
+    let mut prev_lower = false;
+    for c in token.chars() {
+        if matches!(c, '.' | '_' | ':') {
+            prev_lower = false;
+            if !cur.is_empty() {
+                words.push(std::mem::take(&mut cur));
+            }
+            continue;
+        }
+        if camel && c.is_ascii_uppercase() && prev_lower && !cur.is_empty() {
+            words.push(std::mem::take(&mut cur));
+        }
+        prev_lower = c.is_ascii_lowercase() || c.is_ascii_digit();
+        cur.push(c.to_ascii_lowercase());
+    }
+    if !cur.is_empty() {
+        words.push(cur);
+    }
+    words
 }
 
 fn mk(
@@ -495,8 +628,8 @@ fn mk(
     }
 }
 
-fn strip_line_comment(line: &str) -> String {
-    match line.find("//") {
+fn strip_line_comment(line: &str, marker: &str) -> String {
+    match line.find(marker) {
         Some(pos) => line[..pos].to_string(),
         None => line.to_string(),
     }
@@ -529,7 +662,16 @@ mod tests {
     use super::*;
 
     fn lines(src: &str) -> Vec<String> {
-        src.lines().map(strip_line_comment).collect()
+        src.lines().map(|l| strip_line_comment(l, "//")).collect()
+    }
+
+    /// Comparison findings for a source in the given language, via the same
+    /// per-file path production uses.
+    fn comparisons(language: Language, src: &str) -> Vec<Finding> {
+        let raw: Vec<String> = src.lines().map(str::to_string).collect();
+        let mut findings = Vec::new();
+        analyse_file(Path::new("app.src"), &language, &raw, &mut findings);
+        findings
     }
 
     // --- NonConstantTimeComparison ---------------------------------------
@@ -543,7 +685,7 @@ fn verify(hmac_result: &[u8], expected: &[u8]) -> bool {
 ";
         let code = lines(src);
         let mut findings = Vec::new();
-        detect_non_constant_time_comparison(Path::new("lib.rs"), &code, &mut findings);
+        detect_non_constant_time_comparison(Path::new("lib.rs"), &code, false, &mut findings);
         assert_eq!(findings.len(), 1, "{findings:?}");
         assert!(matches!(
             findings[0].kind,
@@ -562,7 +704,7 @@ fn check(password_hash: &str, input_hash: &str) -> bool {
 ";
         let code = lines(src);
         let mut findings = Vec::new();
-        detect_non_constant_time_comparison(Path::new("lib.rs"), &code, &mut findings);
+        detect_non_constant_time_comparison(Path::new("lib.rs"), &code, false, &mut findings);
         assert_eq!(findings.len(), 1, "{findings:?}");
     }
 
@@ -575,7 +717,7 @@ fn verify(auth_tag: &[u8], expected: &[u8], access_token: &str, presented: &str)
 ";
         let code = lines(src);
         let mut findings = Vec::new();
-        detect_non_constant_time_comparison(Path::new("lib.rs"), &code, &mut findings);
+        detect_non_constant_time_comparison(Path::new("lib.rs"), &code, false, &mut findings);
         assert_eq!(findings.len(), 1, "{findings:?}");
         assert_eq!(findings[0].line_start, 2);
     }
@@ -597,7 +739,7 @@ fn check(field: &str, tag: &str, i: Input, token: Input, rrsig: &Rrsig, ksk_tag:
 ";
         let code = lines(src);
         let mut findings = Vec::new();
-        detect_non_constant_time_comparison(Path::new("lib.rs"), &code, &mut findings);
+        detect_non_constant_time_comparison(Path::new("lib.rs"), &code, false, &mut findings);
         assert!(findings.is_empty(), "{findings:?}");
     }
 
@@ -611,7 +753,7 @@ fn verify(hmac_result: &[u8], expected: &[u8]) -> bool {
 ";
         let code = lines(src);
         let mut findings = Vec::new();
-        detect_non_constant_time_comparison(Path::new("lib.rs"), &code, &mut findings);
+        detect_non_constant_time_comparison(Path::new("lib.rs"), &code, false, &mut findings);
         assert!(findings.is_empty(), "{findings:?}");
     }
 
@@ -624,7 +766,7 @@ fn check(session: Option<&Session>, kind: TokenKind) -> bool {
 ";
         let code = lines(src);
         let mut findings = Vec::new();
-        detect_non_constant_time_comparison(Path::new("lib.rs"), &code, &mut findings);
+        detect_non_constant_time_comparison(Path::new("lib.rs"), &code, false, &mut findings);
         assert!(findings.is_empty(), "{findings:?}");
     }
 
@@ -637,7 +779,7 @@ fn check(token: &str) -> bool {
 ";
         let code = lines(src);
         let mut findings = Vec::new();
-        detect_non_constant_time_comparison(Path::new("lib.rs"), &code, &mut findings);
+        detect_non_constant_time_comparison(Path::new("lib.rs"), &code, false, &mut findings);
         assert!(findings.is_empty(), "{findings:?}");
     }
 
@@ -650,7 +792,94 @@ fn same(a: &User, b: &User) -> bool {
 ";
         let code = lines(src);
         let mut findings = Vec::new();
-        detect_non_constant_time_comparison(Path::new("lib.rs"), &code, &mut findings);
+        detect_non_constant_time_comparison(Path::new("lib.rs"), &code, false, &mut findings);
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    // --- NonConstantTimeComparison in Python / JS / TS ---------------------
+
+    #[test]
+    fn ts_webhook_signature_strict_equality_is_flagged() {
+        let src = "\
+export function verifyWebhook(req: Request): boolean {
+    const computedSignature = hmacSha256(req.body, WEBHOOK_SECRET);
+    return computedSignature === req.headers['x-signature'];
+}
+";
+        let findings = comparisons(Language::TypeScript, src);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert!(matches!(
+            findings[0].kind,
+            FindingKind::NonConstantTimeComparison
+        ));
+        assert_eq!(findings[0].line_start, 3);
+    }
+
+    #[test]
+    fn python_hmac_digest_comparison_is_flagged() {
+        let src = "\
+def verify(payload, signature):
+    expected_digest = hmac.new(KEY, payload, hashlib.sha256).hexdigest()
+    if expected_digest != signature:
+        raise Forbidden()
+";
+        let findings = comparisons(Language::Python, src);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].line_start, 3);
+    }
+
+    #[test]
+    fn constant_time_idioms_in_python_and_js_are_clean() {
+        let py = "\
+def verify(payload, signature):
+    expected = hmac.new(KEY, payload, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
+";
+        assert!(comparisons(Language::Python, py).is_empty());
+        let js = "\
+const ok = crypto.timingSafeEqual(Buffer.from(computedSignature), Buffer.from(signature));
+";
+        assert!(comparisons(Language::JavaScript, js).is_empty());
+    }
+
+    #[test]
+    fn js_metadata_null_and_literal_comparisons_are_clean() {
+        let src = "\
+function checks(signature, token, secret) {
+    if (signature.length === 64) { return; }
+    if (signature === null || token === undefined) { return; }
+    if (typeof secret === 'string') { return; }
+    if (digestSize === 32) { return; }
+}
+";
+        let findings = comparisons(Language::JavaScript, src);
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    #[test]
+    fn python_none_and_metadata_comparisons_are_clean() {
+        let src = "\
+def checks(signature, digest_size):
+    if signature == None:
+        return
+    if digest_size == 32:
+        return
+    ok = flag == True
+";
+        let findings = comparisons(Language::Python, src);
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    #[test]
+    fn rust_camel_case_type_names_stay_unsplit() {
+        // In Rust, camelCase means a type: `HmacKey == other` stayed clean
+        // before the multi-language work and must stay clean after it.
+        let src = "\
+fn same(a: HmacKey, b: HmacKey) -> bool {
+    a == b && kind == HmacKind::Sha256
+}
+";
+        let findings = comparisons(Language::Rust, src);
         assert!(findings.is_empty(), "{findings:?}");
     }
 

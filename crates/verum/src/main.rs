@@ -462,6 +462,8 @@ fn is_security(k: &FindingKind) -> bool {
             | FindingKind::PathTraversal
             | FindingKind::NonConstantTimeComparison
             | FindingKind::StaticAeadNonce
+            | FindingKind::TlsVerificationDisabled
+            | FindingKind::UnsafeDeserialization
     )
 }
 

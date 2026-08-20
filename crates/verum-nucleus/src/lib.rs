@@ -314,6 +314,17 @@ pub enum FindingKind {
     WeakCrypto,
     HardcodedSecret,
     EvalUsage,
+    /// TLS certificate verification switched off on an HTTPS client -
+    /// `rejectUnauthorized: false`, `verify=False`, an unverified SSL
+    /// context, or `NODE_TLS_REJECT_UNAUTHORIZED=0`. The connection still
+    /// encrypts, but to whoever answered: any on-path attacker can present
+    /// any certificate and read or rewrite the traffic.
+    TlsVerificationDisabled,
+    /// Data deserialized with a format that can execute code during decoding
+    /// (`pickle.load`/`loads` on a non-literal, `yaml.load` without a safe
+    /// loader, `new Function` built from non-literal text): feeding it
+    /// attacker-influenced bytes is remote code execution.
+    UnsafeDeserialization,
     MissingAuthMiddleware,
     MissingRoleCheck,
     PotentialIdor,
@@ -449,6 +460,8 @@ impl FindingKind {
             FindingKind::WeakCrypto => "WeakCrypto",
             FindingKind::HardcodedSecret => "HardcodedSecret",
             FindingKind::EvalUsage => "EvalUsage",
+            FindingKind::TlsVerificationDisabled => "TlsVerificationDisabled",
+            FindingKind::UnsafeDeserialization => "UnsafeDeserialization",
             FindingKind::MissingAuthMiddleware => "MissingAuthMiddleware",
             FindingKind::MissingRoleCheck => "MissingRoleCheck",
             FindingKind::PotentialIdor => "PotentialIdor",
