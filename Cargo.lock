@@ -1985,6 +1985,7 @@ dependencies = [
  "anyhow",
  "rayon",
  "regex",
+ "rustc-hash",
  "serde",
  "serde_json",
  "serde_yaml",

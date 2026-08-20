@@ -33,6 +33,7 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rayon = "1.10"
+rustc-hash = "2"
 petgraph = { version = "0.8", features = ["serde-1"] }
 ahash = "0.8"
 walkdir = "2"
