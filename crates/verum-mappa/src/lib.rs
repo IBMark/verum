@@ -145,6 +145,16 @@ pub struct Atlas {
     pub config: AtlasConfig,
 }
 
+/// Per-phase timing when VERUM_PROFILE is set in the environment, mirroring
+/// the pass timing in verum-lumen. Timing is observation only - it never
+/// influences what gets mapped.
+fn profile_phase(profile: bool, name: &str, since: Instant) -> Instant {
+    if profile {
+        eprintln!("  atlas {:<18} {:>6.2}s", name, since.elapsed().as_secs_f64());
+    }
+    Instant::now()
+}
+
 impl Atlas {
     pub fn new(config: AtlasConfig) -> Self {
         Self { config }
@@ -153,9 +163,12 @@ impl Atlas {
     /// Build the IR from the configured root directory.
     pub fn build(&self) -> Result<Ir> {
         let start = Instant::now();
+        let profile = std::env::var("VERUM_PROFILE").is_ok();
+        let mut mark = Instant::now();
 
         let files = self.collect_files();
         tracing::info!("Collected {} files", files.len());
+        mark = profile_phase(profile, "walk", mark);
 
         let partial_irs: Vec<Ir> = files
             .par_iter()
@@ -167,11 +180,13 @@ impl Atlas {
                 }
             })
             .collect();
+        mark = profile_phase(profile, "parse", mark);
 
         let mut ir = partial_irs.into_iter().fold(Ir::new(), |mut acc, partial| {
             acc.merge(partial);
             acc
         });
+        mark = profile_phase(profile, "merge", mark);
 
         let infra_files = self.collect_infra_files();
         if !infra_files.is_empty() {
@@ -199,8 +214,10 @@ impl Atlas {
         if ir.framework == Framework::Laravel {
             laravel::extract_routes(&self.config.root, &mut ir);
         }
+        mark = profile_phase(profile, "infra+framework", mark);
 
         resolver::resolve(&mut ir);
+        mark = profile_phase(profile, "resolve", mark);
 
         java_web::extract_routes(&mut ir);
 
@@ -213,6 +230,7 @@ impl Atlas {
         endpoints::link(&mut ir);
 
         detect_entry_points(&mut ir);
+        profile_phase(profile, "link+entrypoints", mark);
 
         let elapsed = start.elapsed();
         ir.metadata.build_time_ms = elapsed.as_millis() as u64;
