@@ -95,6 +95,7 @@ fn detect_n_plus_one(ir: &Ir) -> Vec<Finding> {
                 if body_entered && brace_depth <= 0 {
                     if rel_accesses_in_method > 0 && !has_eager_load {
                         findings.push(Finding {
+                            fingerprint: String::new(),
                             id: format!("perf-nplusone-{}:{}", path.display(), method_start_line),
                             kind: FindingKind::NPlusOneQuery,
                             severity: Severity::Medium,
@@ -307,6 +308,7 @@ fn scan_hooks_without_deps(content: &str, path: &std::path::Path, findings: &mut
 
             if !has_dep_array {
                 findings.push(Finding {
+                    fingerprint: String::new(),
                     id: format!("perf-hookdeps-{}:{}", path.display(), hook_line),
                     kind: FindingKind::MissingHookDependencies,
                     severity: Severity::Low,

@@ -479,6 +479,7 @@ fn mk(
     suggestion: &str,
 ) -> Finding {
     Finding {
+        fingerprint: String::new(),
         id: format!("crypto-{:?}-{}:{}", kind, path.display(), line),
         kind,
         severity,

@@ -149,6 +149,7 @@ pub fn analyse_with_context(
                     continue;
                 }
                 findings.push(Finding {
+                    fingerprint: String::new(),
                     id: format!("crate-{}-{}:{}", rule.krate, path.display(), idx + 1),
                     kind: FindingKind::CrateApiMisuse,
                     severity: rule.severity.clone(),

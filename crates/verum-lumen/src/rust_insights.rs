@@ -122,6 +122,7 @@ fn mk(
     advice: &str,
 ) -> Finding {
     Finding {
+        fingerprint: String::new(),
         id: format!("rust-{:?}-{}:{}", kind, path.display(), line),
         kind,
         severity,

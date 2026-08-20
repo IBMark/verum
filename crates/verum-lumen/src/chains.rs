@@ -290,6 +290,7 @@ fn make_chain_finding(
         .collect();
 
     Some(Finding {
+        fingerprint: String::new(),
         id: format!("chain-{}-{}", entry_sym.id.0, sink_edge.name),
         kind: FindingKind::DangerousChain,
         severity,
@@ -325,6 +326,7 @@ fn taint_chains(ir: &Ir) -> Vec<Finding> {
         }
         hops.push(sink_label(&tp.sink).to_string());
         out.push(Finding {
+            fingerprint: String::new(),
             id: format!("chain-taint-{}", i),
             kind: FindingKind::DangerousChain,
             severity: taint_sink_severity(&tp.sink),

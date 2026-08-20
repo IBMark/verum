@@ -434,6 +434,7 @@ fn mk(
     suggestion: &str,
 ) -> Finding {
     Finding {
+        fingerprint: String::new(),
         id: format!("transport-{:?}-{}:{}", kind, path.display(), line),
         kind,
         severity,

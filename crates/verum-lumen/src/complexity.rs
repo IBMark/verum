@@ -23,6 +23,7 @@ pub fn analyse(ir: &Ir, standard: &Standard) -> Vec<Finding> {
             let method_count = methods_per_class.get(id).copied().unwrap_or(0);
             if method_count > standard.max_class_methods as usize {
                 findings.push(Finding {
+                    fingerprint: String::new(),
                     id: format!("complexity-godclass-{}", sym.fully_qualified),
                     kind: FindingKind::GodClass,
                     severity: Severity::Medium,
@@ -53,6 +54,7 @@ pub fn analyse(ir: &Ir, standard: &Standard) -> Vec<Finding> {
 
         if line_count > standard.max_function_lines {
             findings.push(Finding {
+                fingerprint: String::new(),
                 id: format!("complexity-long-{}", sym.fully_qualified),
                 kind: FindingKind::LongFunction,
                 severity: Severity::Medium,
@@ -73,6 +75,7 @@ pub fn analyse(ir: &Ir, standard: &Standard) -> Vec<Finding> {
 
         if sym.param_count > standard.max_parameters {
             findings.push(Finding {
+                fingerprint: String::new(),
                 id: format!("complexity-params-{}", sym.fully_qualified),
                 kind: FindingKind::TooManyParams,
                 severity: Severity::Medium,

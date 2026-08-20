@@ -30,12 +30,7 @@ use verum_nucleus::{
 /// the same tree could never be compared. FNV-1a is stable across runs,
 /// platforms, and builds.
 pub fn stable_hash(s: &str) -> u64 {
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for b in s.as_bytes() {
-        hash ^= u64::from(*b);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
+    verum_nucleus::stable_hash(s)
 }
 
 /// Strip comments from source text before normalization so that comment

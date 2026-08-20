@@ -433,6 +433,7 @@ pub fn analyse_with_context(
                         };
 
                         findings.push(Finding {
+                            fingerprint: String::new(),
                             id: format!("sec-weakcrypto-{}-{}:{}", func, path.display(), line_num),
                             kind: FindingKind::WeakCrypto,
                             severity,
@@ -461,6 +462,7 @@ pub fn analyse_with_context(
                                         && line.as_bytes()[pos - 1] != b'_';
                                 if is_word_start {
                                     findings.push(Finding {
+                                        fingerprint: String::new(),
                                         id: format!(
                                             "sec-forbidden-{}-{}:{}",
                                             forbidden,
@@ -494,6 +496,7 @@ pub fn analyse_with_context(
                         }
 
                         findings.push(Finding {
+                            fingerprint: String::new(),
                             id: format!("sec-eval-{}:{}", path.display(), line_num),
                             kind: FindingKind::EvalUsage,
                             severity: Severity::Critical,
@@ -545,6 +548,7 @@ pub fn analyse_with_context(
                         }
 
                         findings.push(Finding {
+                            fingerprint: String::new(),
                             id: format!("sec-secret-{}:{}", path.display(), line_num),
                             kind: FindingKind::HardcodedSecret,
                             severity: Severity::Critical,
@@ -603,6 +607,7 @@ pub fn analyse_with_context(
         };
 
         findings.push(Finding {
+            fingerprint: String::new(),
             id: format!(
                 "sec-taint-{}:{}",
                 taint.sink_file.display(),

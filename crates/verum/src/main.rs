@@ -317,72 +317,7 @@ fn severity_label(s: &Severity) -> colored::ColoredString {
 }
 
 fn finding_kind_label(k: &FindingKind) -> &'static str {
-    match k {
-        FindingKind::DeadFunction => "DeadFunction",
-        FindingKind::DeadClass => "DeadClass",
-        FindingKind::DeadFile => "DeadFile",
-        FindingKind::UnreachableCode => "UnreachableCode",
-        FindingKind::ExactDuplicate => "ExactDuplicate",
-        FindingKind::RenamedDuplicate => "RenamedDuplicate",
-        FindingKind::SemanticDuplicate => "SemanticDuplicate",
-        FindingKind::SqlInjection => "SqlInjection",
-        FindingKind::XssVulnerability => "XssVulnerability",
-        FindingKind::WeakCrypto => "WeakCrypto",
-        FindingKind::HardcodedSecret => "HardcodedSecret",
-        FindingKind::EvalUsage => "EvalUsage",
-        FindingKind::MissingAuthMiddleware => "MissingAuthMiddleware",
-        FindingKind::MissingRoleCheck => "MissingRoleCheck",
-        FindingKind::PotentialIdor => "PotentialIdor",
-        FindingKind::WeakRandom => "WeakRandom",
-        FindingKind::OpenRedirect => "OpenRedirect",
-        FindingKind::GodClass => "GodClass",
-        FindingKind::CircularDependency => "CircularDependency",
-        FindingKind::HighComplexity => "HighComplexity",
-        FindingKind::LongFunction => "LongFunction",
-        FindingKind::TooManyParams => "TooManyParams",
-        FindingKind::DeepNesting => "DeepNesting",
-        FindingKind::NPlusOneQuery => "NPlusOneQuery",
-        FindingKind::StringConcatInLoop => "StringConcatInLoop",
-        FindingKind::ObjectInstantiationInLoop => "ObjectInstantiationInLoop",
-        FindingKind::MissingHookDependencies => "MissingHookDependencies",
-        FindingKind::NamingInconsistency => "NamingInconsistency",
-        FindingKind::ConventionViolation => "ConventionViolation",
-        FindingKind::OpenSecurityGroup => "OpenSecurityGroup",
-        FindingKind::UnencryptedStorage => "UnencryptedStorage",
-        FindingKind::PublicResource => "PublicResource",
-        FindingKind::IamOverPermission => "IamOverPermission",
-        FindingKind::RunningAsRoot => "RunningAsRoot",
-        FindingKind::PrivilegedContainer => "PrivilegedContainer",
-        FindingKind::MissingResourceLimits => "MissingResourceLimits",
-        FindingKind::MissingHealthProbes => "MissingHealthProbes",
-        FindingKind::UnpinnedImage => "UnpinnedImage",
-        FindingKind::NoNetworkPolicy => "NoNetworkPolicy",
-        FindingKind::SecretInEnvVar => "SecretInEnvVar",
-        FindingKind::HardcodedCredential => "HardcodedCredential",
-        FindingKind::PciViolation => "PciViolation",
-        FindingKind::GdprViolation => "GdprViolation",
-        FindingKind::Soc2Violation => "Soc2Violation",
-        FindingKind::DangerousChain => "DangerousChain",
-        FindingKind::UnsafeUsage => "UnsafeUsage",
-        FindingKind::PanicRisk => "PanicRisk",
-        FindingKind::BlockingInAsync => "BlockingInAsync",
-        FindingKind::UnboundedChannel => "UnboundedChannel",
-        FindingKind::HotPathAllocation => "HotPathAllocation",
-        FindingKind::LockOnHotPath => "LockOnHotPath",
-        FindingKind::LockAcrossAwait => "LockAcrossAwait",
-        FindingKind::PathTraversal => "PathTraversal",
-        FindingKind::VulnerableDependency => "VulnerableDependency",
-        FindingKind::UnmaintainedDependency => "UnmaintainedDependency",
-        FindingKind::DuplicateDependency => "DuplicateDependency",
-        FindingKind::MissingSafetyComment => "MissingSafetyComment",
-        FindingKind::CrateApiMisuse => "CrateApiMisuse",
-        FindingKind::SplitDatagramMessage => "SplitDatagramMessage",
-        FindingKind::OversizedDatagram => "OversizedDatagram",
-        FindingKind::UnvalidatedLengthPrefix => "UnvalidatedLengthPrefix",
-        FindingKind::NonConstantTimeComparison => "NonConstantTimeComparison",
-        FindingKind::StaticAeadNonce => "StaticAeadNonce",
-        FindingKind::ParseFailure => "ParseFailure",
-    }
+    k.label()
 }
 
 fn is_dependency(k: &FindingKind) -> bool {
@@ -2157,7 +2092,7 @@ fn render_sarif(findings: &[verum_nucleus::Finding]) -> Result<String> {
             rule_ids.insert(rule.clone());
             let start = f.line_start.max(1);
             let end = f.line_end.max(start);
-            serde_json::json!({
+            let mut result = serde_json::json!({
                 "ruleId": rule,
                 "level": severity_to_sarif_level(&f.severity),
                 "message": { "text": f.message },
@@ -2167,7 +2102,14 @@ fn render_sarif(findings: &[verum_nucleus::Finding]) -> Result<String> {
                         "region": { "startLine": start, "endLine": end }
                     }
                 }]
-            })
+            });
+            // The stable fingerprint keeps GitHub code-scanning alerts from
+            // being closed and reopened when unrelated edits shift lines.
+            if !f.fingerprint.is_empty() {
+                result["partialFingerprints"] =
+                    serde_json::json!({ "verumFingerprint/v1": f.fingerprint });
+            }
+            result
         })
         .collect();
 

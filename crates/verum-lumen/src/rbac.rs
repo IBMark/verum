@@ -119,6 +119,7 @@ pub fn analyse(ir: &Ir) -> Vec<Finding> {
         }
 
         findings.push(Finding {
+            fingerprint: String::new(),
             id: format!("rbac-noauth-{}-{}", route.method_str(), route.path),
             kind: FindingKind::MissingAuthMiddleware,
             severity: Severity::High,

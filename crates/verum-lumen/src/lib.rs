@@ -5,6 +5,7 @@ pub mod crypto_hygiene;
 pub mod dead_code;
 pub mod deps;
 pub mod duplicates;
+pub mod fingerprint;
 /// In-memory entry points for the out-of-tree fuzz targets in `fuzz/`.
 /// Compiled only under the off-by-default `fuzzing` feature.
 #[cfg(feature = "fuzzing")]
@@ -432,6 +433,11 @@ impl Prism {
         // both the pattern scan and taint). Collapse to one per kind+location.
         let mut seen = HashSet::new();
         findings.retain(|f| seen.insert((format!("{:?}", f.kind), f.file.clone(), f.line_start)));
+
+        // Stable identities for baseline matching, assigned over the final
+        // sorted order so the occurrence index is reproducible. Purely
+        // additive: no finding is added, removed, or reordered by this.
+        fingerprint::assign(&mut findings, ir, root);
 
         let score = scoring::compute(ir, &findings, &reachability_r);
 

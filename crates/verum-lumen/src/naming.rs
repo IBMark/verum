@@ -44,6 +44,7 @@ pub fn analyse(ir: &Ir, config: &NamingConfig) -> Vec<Finding> {
 
                 if !check_convention(&sym.name, convention) {
                     findings.push(Finding {
+                        fingerprint: String::new(),
                         id: format!("naming-class-{}", sym.fully_qualified),
                         kind: FindingKind::ConventionViolation,
                         severity: Severity::Low,
@@ -84,6 +85,7 @@ pub fn analyse(ir: &Ir, config: &NamingConfig) -> Vec<Finding> {
 
                 if !check_convention(&sym.name, convention) {
                     findings.push(Finding {
+                        fingerprint: String::new(),
                         id: format!("naming-method-{}", sym.fully_qualified),
                         kind: FindingKind::ConventionViolation,
                         severity: Severity::Low,
@@ -120,6 +122,7 @@ pub fn analyse(ir: &Ir, config: &NamingConfig) -> Vec<Finding> {
 
                     if !check_convention(&sym.name, convention) {
                         findings.push(Finding {
+                            fingerprint: String::new(),
                             id: format!("naming-component-{}", sym.fully_qualified),
                             kind: FindingKind::ConventionViolation,
                             severity: Severity::Low,
@@ -155,6 +158,7 @@ pub fn analyse(ir: &Ir, config: &NamingConfig) -> Vec<Finding> {
 
                     if !check_convention(&sym.name, convention) {
                         findings.push(Finding {
+                            fingerprint: String::new(),
                             id: format!("naming-function-{}", sym.fully_qualified),
                             kind: FindingKind::ConventionViolation,
                             severity: Severity::Low,
@@ -192,6 +196,7 @@ pub fn analyse(ir: &Ir, config: &NamingConfig) -> Vec<Finding> {
 
                 if !check_convention(&sym.name, convention) {
                     findings.push(Finding {
+                        fingerprint: String::new(),
                         id: format!("naming-constant-{}", sym.fully_qualified),
                         kind: FindingKind::ConventionViolation,
                         severity: Severity::Low,
@@ -239,6 +244,7 @@ pub fn analyse(ir: &Ir, config: &NamingConfig) -> Vec<Finding> {
 
                 if !check_convention(&sym.name, convention) {
                     findings.push(Finding {
+                        fingerprint: String::new(),
                         id: format!("naming-variable-{}", sym.fully_qualified),
                         kind: FindingKind::ConventionViolation,
                         severity: Severity::Low,
@@ -329,6 +335,7 @@ pub fn analyse(ir: &Ir, config: &NamingConfig) -> Vec<Finding> {
                 })
                 .collect();
             findings.push(Finding {
+                fingerprint: String::new(),
                 id: format!("naming-inconsistency-{}", variants.join("-")),
                 kind: FindingKind::NamingInconsistency,
                 severity: Severity::Medium,

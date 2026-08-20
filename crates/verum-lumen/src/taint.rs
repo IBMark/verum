@@ -383,6 +383,7 @@ pub fn analyse_with_context(ir: &Ir, ctx: &ScanContext) -> (Vec<Finding>, Vec<Ta
     for ((path, _, _, spans), scan) in contents.iter().zip(&scans) {
         for d in &scan.detections {
             findings.push(Finding {
+                fingerprint: String::new(),
                 id: format!(
                     "taint-{:?}-{}:{}",
                     d.cat.finding_kind(),
@@ -456,6 +457,7 @@ pub fn analyse_with_context(ir: &Ir, ctx: &ScanContext) -> (Vec<Finding>, Vec<Ta
                 description: format!("{} sink inside `{}`", cat.label(), callee_sym.name),
             });
             findings.push(Finding {
+                fingerprint: String::new(),
                 id: format!(
                     "taint-cross-{}-{}:{}",
                     call.callee,

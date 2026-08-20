@@ -366,6 +366,7 @@ mod tests {
 
     fn finding(kind: FindingKind, severity: Severity) -> Finding {
         Finding {
+            fingerprint: String::new(),
             id: "t".into(),
             kind,
             severity,

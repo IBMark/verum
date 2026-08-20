@@ -1099,6 +1099,7 @@ fn make_finding(
 ) -> Finding {
     let id = format!("k8s-{:?}-{}:{}", kind, file.display(), line);
     Finding {
+        fingerprint: String::new(),
         id,
         kind,
         severity,
@@ -1126,6 +1127,7 @@ fn make_finding_with_id(
     suggestion: &str,
 ) -> Finding {
     Finding {
+        fingerprint: String::new(),
         id: id.to_string(),
         kind,
         severity,

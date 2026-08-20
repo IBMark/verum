@@ -539,6 +539,7 @@ pub fn analyse(ir: &Ir, config: &DeadCodeConfig) -> Vec<Finding> {
         let confidence = if dynamic_risk { 0.60 } else { 0.95 };
 
         findings.push(Finding {
+            fingerprint: String::new(),
             id: format!("dead-{}", sym.fully_qualified),
             kind: FindingKind::DeadFunction,
             severity: Severity::Medium,

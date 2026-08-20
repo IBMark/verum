@@ -214,6 +214,7 @@ pub fn analyse_with(root: &Path, advisories: &[Advisory]) -> Vec<Finding> {
                 None => "migrate to a maintained alternative".to_string(),
             };
             findings.push(Finding {
+                fingerprint: String::new(),
                 id: format!("dep-{}-{}", adv.id, pkg.name),
                 kind,
                 severity: adv.severity.clone(),
@@ -258,6 +259,7 @@ pub fn analyse_with(root: &Path, advisories: &[Advisory]) -> Vec<Finding> {
         if majors.len() > 1 {
             let list = majors.iter().cloned().collect::<Vec<_>>().join(", ");
             findings.push(Finding {
+                fingerprint: String::new(),
                 id: format!("dep-dup-{name}"),
                 kind: FindingKind::DuplicateDependency,
                 severity: Severity::Low,

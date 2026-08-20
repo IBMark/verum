@@ -508,6 +508,7 @@ fn make_finding(
     suggestion: &str,
 ) -> Finding {
     Finding {
+        fingerprint: String::new(),
         id: format!("docker-{:?}-{}:{}", kind, path.display(), line_num),
         kind,
         severity,

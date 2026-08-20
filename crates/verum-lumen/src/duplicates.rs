@@ -261,6 +261,7 @@ fn emit_group(
             call_sites_to_remap.extend(call_sites_of(*dup_id, dup_sym, sites_by_id, sites_by_name));
 
             findings.push(Finding {
+                fingerprint: String::new(),
                 id: format!(
                     "dup-{}-{}",
                     canonical_sym.fully_qualified, dup_sym.fully_qualified

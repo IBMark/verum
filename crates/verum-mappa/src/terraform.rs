@@ -943,6 +943,7 @@ fn make_finding(
     suggestion: &str,
 ) -> Finding {
     Finding {
+        fingerprint: String::new(),
         id: format!("tf-{:?}-{}:{}", kind, path.display(), line_num),
         kind,
         severity,

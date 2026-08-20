@@ -18,6 +18,22 @@ pub fn matchable_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
+/// Deterministic string hash (FNV-1a, 64-bit) - the workspace's one stable
+/// hash for anything that must survive across runs, machines and builds:
+/// symbol/file ids in the mapper and finding fingerprints in the reports.
+/// `std::hash` and ahash are seeded per process, so values built with them
+/// can never be compared between two invocations; FNV-1a is a documented,
+/// fixed algorithm (offset basis 0xcbf29ce484222325, prime 0x100000001b3)
+/// with identical output everywhere.
+pub fn stable_hash(s: &str) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in s.as_bytes() {
+        hash ^= u64::from(*b);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SymbolId(pub u64);
 
@@ -403,6 +419,80 @@ pub enum FindingKind {
     ParseFailure,
 }
 
+impl FindingKind {
+    /// The kind's canonical name - the exact string used in reports, SARIF
+    /// rule ids, fingerprints, and `verum:ignore[...]` suppression lists.
+    /// Always the variant's own name, so it matches the serde encoding.
+    pub fn label(&self) -> &'static str {
+        match self {
+            FindingKind::DeadFunction => "DeadFunction",
+            FindingKind::DeadClass => "DeadClass",
+            FindingKind::DeadFile => "DeadFile",
+            FindingKind::UnreachableCode => "UnreachableCode",
+            FindingKind::ExactDuplicate => "ExactDuplicate",
+            FindingKind::RenamedDuplicate => "RenamedDuplicate",
+            FindingKind::SemanticDuplicate => "SemanticDuplicate",
+            FindingKind::SqlInjection => "SqlInjection",
+            FindingKind::XssVulnerability => "XssVulnerability",
+            FindingKind::WeakCrypto => "WeakCrypto",
+            FindingKind::HardcodedSecret => "HardcodedSecret",
+            FindingKind::EvalUsage => "EvalUsage",
+            FindingKind::MissingAuthMiddleware => "MissingAuthMiddleware",
+            FindingKind::MissingRoleCheck => "MissingRoleCheck",
+            FindingKind::PotentialIdor => "PotentialIdor",
+            FindingKind::WeakRandom => "WeakRandom",
+            FindingKind::OpenRedirect => "OpenRedirect",
+            FindingKind::GodClass => "GodClass",
+            FindingKind::CircularDependency => "CircularDependency",
+            FindingKind::HighComplexity => "HighComplexity",
+            FindingKind::LongFunction => "LongFunction",
+            FindingKind::TooManyParams => "TooManyParams",
+            FindingKind::DeepNesting => "DeepNesting",
+            FindingKind::NPlusOneQuery => "NPlusOneQuery",
+            FindingKind::StringConcatInLoop => "StringConcatInLoop",
+            FindingKind::ObjectInstantiationInLoop => "ObjectInstantiationInLoop",
+            FindingKind::MissingHookDependencies => "MissingHookDependencies",
+            FindingKind::NamingInconsistency => "NamingInconsistency",
+            FindingKind::ConventionViolation => "ConventionViolation",
+            FindingKind::OpenSecurityGroup => "OpenSecurityGroup",
+            FindingKind::UnencryptedStorage => "UnencryptedStorage",
+            FindingKind::PublicResource => "PublicResource",
+            FindingKind::IamOverPermission => "IamOverPermission",
+            FindingKind::RunningAsRoot => "RunningAsRoot",
+            FindingKind::PrivilegedContainer => "PrivilegedContainer",
+            FindingKind::MissingResourceLimits => "MissingResourceLimits",
+            FindingKind::MissingHealthProbes => "MissingHealthProbes",
+            FindingKind::UnpinnedImage => "UnpinnedImage",
+            FindingKind::NoNetworkPolicy => "NoNetworkPolicy",
+            FindingKind::SecretInEnvVar => "SecretInEnvVar",
+            FindingKind::HardcodedCredential => "HardcodedCredential",
+            FindingKind::PciViolation => "PciViolation",
+            FindingKind::GdprViolation => "GdprViolation",
+            FindingKind::Soc2Violation => "Soc2Violation",
+            FindingKind::DangerousChain => "DangerousChain",
+            FindingKind::UnsafeUsage => "UnsafeUsage",
+            FindingKind::PanicRisk => "PanicRisk",
+            FindingKind::BlockingInAsync => "BlockingInAsync",
+            FindingKind::UnboundedChannel => "UnboundedChannel",
+            FindingKind::HotPathAllocation => "HotPathAllocation",
+            FindingKind::LockOnHotPath => "LockOnHotPath",
+            FindingKind::LockAcrossAwait => "LockAcrossAwait",
+            FindingKind::PathTraversal => "PathTraversal",
+            FindingKind::VulnerableDependency => "VulnerableDependency",
+            FindingKind::UnmaintainedDependency => "UnmaintainedDependency",
+            FindingKind::DuplicateDependency => "DuplicateDependency",
+            FindingKind::MissingSafetyComment => "MissingSafetyComment",
+            FindingKind::CrateApiMisuse => "CrateApiMisuse",
+            FindingKind::SplitDatagramMessage => "SplitDatagramMessage",
+            FindingKind::OversizedDatagram => "OversizedDatagram",
+            FindingKind::UnvalidatedLengthPrefix => "UnvalidatedLengthPrefix",
+            FindingKind::NonConstantTimeComparison => "NonConstantTimeComparison",
+            FindingKind::StaticAeadNonce => "StaticAeadNonce",
+            FindingKind::ParseFailure => "ParseFailure",
+        }
+    }
+}
+
 /// A performance objective a codebase can be optimised for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Objective {
@@ -462,6 +552,16 @@ pub struct Finding {
     pub suggestion: String,
     pub auto_fixable: bool,
     pub related: Vec<Location>,
+    /// Stable identity for baseline matching, assigned centrally after
+    /// analysis (see `verum-lumen`'s `fingerprint` module): the hex-encoded
+    /// [`stable_hash`] of (kind label, repo-relative path, symbol name,
+    /// message with digits stripped, occurrence index). Deliberately excludes
+    /// the absolute path and the line number, so the fingerprint survives the
+    /// repo living in a different directory and unrelated edits elsewhere in
+    /// the file. Empty until assigned; `serde(default)` so serialized
+    /// findings written before this field existed still load.
+    #[serde(default)]
+    pub fingerprint: String,
 }
 
 impl Finding {
@@ -491,6 +591,7 @@ impl Finding {
                 .to_string(),
             auto_fixable: false,
             related: Vec::new(),
+            fingerprint: String::new(),
         }
     }
 }
