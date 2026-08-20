@@ -29,26 +29,22 @@ pub fn parse_source(
     id_seed: Option<u64>,
 ) -> Result<Ir> {
     let source = source.to_string();
-    let mut parser = tree_sitter::Parser::new();
 
-    let language = if is_typescript {
-        // Use TSX parser for .tsx files, regular TS for .ts
+    // TSX needs its own grammar; plain TS and JS each get their own too.
+    let (key, language): (&'static str, fn() -> tree_sitter::Language) = if is_typescript {
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         if ext == "tsx" {
-            tree_sitter_typescript::LANGUAGE_TSX.into()
+            ("tsx", || tree_sitter_typescript::LANGUAGE_TSX.into())
         } else {
-            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
+            ("typescript", || {
+                tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
+            })
         }
     } else {
-        tree_sitter_javascript::LANGUAGE.into()
+        ("javascript", || tree_sitter_javascript::LANGUAGE.into())
     };
 
-    parser
-        .set_language(&language)
-        .map_err(|e| anyhow::anyhow!("Failed to set JS/TS language: {}", e))?;
-
-    let tree = parser
-        .parse(&source, None)
+    let tree = crate::parser_pool::parse(key, language, &source)
         .ok_or_else(|| anyhow::anyhow!("Failed to parse {}", path.display()))?;
 
     let lang = if is_typescript {

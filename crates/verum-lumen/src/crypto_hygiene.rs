@@ -19,7 +19,6 @@
 //! comparisons, and a nonce buffer filled from a CSPRNG before use.
 
 use std::collections::HashSet;
-use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -107,7 +106,17 @@ const COMPARISON_SUGGESTION: &str = "use a constant-time comparison for security
      of `==`/`!=`; a naive comparison short-circuits on the first mismatched byte and leaks \
      timing information an attacker can use to forge the value byte-by-byte";
 
+/// Reads every Rust file itself; prefer [`analyse_with_context`] when a
+/// pre-read [`ScanContext`](crate::scan::ScanContext) is already available.
 pub fn analyse(ir: &Ir) -> Vec<Finding> {
+    analyse_with_context(ir, &crate::scan::ScanContext::index_only(ir))
+}
+
+/// Detector run over the shared [`ScanContext`](crate::scan::ScanContext)
+/// lines, so the tree is read once for all line-scanning passes. The context's
+/// line splitting matches the `std::fs::read` + `BufRead::lines` shape this
+/// pass used to do itself, so findings are identical.
+pub fn analyse_with_context(ir: &Ir, ctx: &crate::scan::ScanContext) -> Vec<Finding> {
     let mut findings = Vec::new();
 
     let mut files: Vec<PathBuf> = ir
@@ -140,12 +149,11 @@ pub fn analyse(ir: &Ir) -> Vec<Finding> {
                 return file_findings;
             }
 
-            let Ok(raw) = std::fs::read(path) else {
+            let Some(lines) = ctx.lines(path) else {
                 return file_findings;
             };
-            let lines: Vec<String> = raw.lines().map(|l| l.unwrap_or_default()).collect();
 
-            analyse_file(path, &lines, &mut file_findings);
+            analyse_file(path, lines.as_ref(), &mut file_findings);
             file_findings
         })
         .collect();

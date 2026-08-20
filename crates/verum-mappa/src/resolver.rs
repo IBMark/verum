@@ -1,5 +1,6 @@
-use std::collections::HashMap;
 use std::path::Path;
+
+use rustc_hash::FxHashMap;
 
 use verum_nucleus::{CallTarget, Ir, SymbolId, SymbolKind};
 
@@ -82,20 +83,20 @@ fn decide_all(ir: &Ir) -> Vec<(usize, CallTarget)> {
         (&a.1.file, a.1.line_start, &a.1.name).cmp(&(&b.1.file, b.1.line_start, &b.1.name))
     });
 
-    let mut by_name: HashMap<&str, Vec<SymbolId>> = HashMap::new();
+    let mut by_name: FxHashMap<&str, Vec<SymbolId>> = FxHashMap::default();
     // Several symbols can share one fully-qualified name - a private helper
     // repeated per module (Rust `hash_path`, Go `init`) is the common case.
     // Keeping only the first would bind every caller to one arbitrary
     // definition and leave the rest looking uncalled, so track them all.
-    let mut by_fq: HashMap<&str, Vec<SymbolId>> = HashMap::new();
+    let mut by_fq: FxHashMap<&str, Vec<SymbolId>> = FxHashMap::default();
     // Suffix index: last segment of FQ name -> Vec of (FQ name, SymbolId)
-    let mut by_suffix: HashMap<&str, Vec<(&str, SymbolId)>> = HashMap::new();
+    let mut by_suffix: FxHashMap<&str, Vec<(&str, SymbolId)>> = FxHashMap::default();
 
     // Receiver-aware indexes: methods keyed by parent class then method name
     // (nested so lookups work with a borrowed `&str`, no per-lookup String),
     // and classes by short name (for `new Class` / `Class::method`).
-    let mut method_by_parent: HashMap<SymbolId, HashMap<&str, SymbolId>> = HashMap::new();
-    let mut class_by_name: HashMap<&str, Vec<SymbolId>> = HashMap::new();
+    let mut method_by_parent: FxHashMap<SymbolId, FxHashMap<&str, SymbolId>> = FxHashMap::default();
+    let mut class_by_name: FxHashMap<&str, Vec<SymbolId>> = FxHashMap::default();
 
     for (id, sym) in &ordered {
         by_name.entry(sym.name.as_str()).or_default().push(*id);
@@ -135,7 +136,7 @@ fn decide_all(ir: &Ir) -> Vec<(usize, CallTarget)> {
     }
 
     // File of each symbol, for disambiguating same-named definitions.
-    let sym_file: HashMap<SymbolId, &Path> = ordered
+    let sym_file: FxHashMap<SymbolId, &Path> = ordered
         .iter()
         .map(|(id, s)| (*id, s.file.as_path()))
         .collect();
@@ -227,13 +228,13 @@ fn decide_all(ir: &Ir) -> Vec<(usize, CallTarget)> {
     };
 
     // Precompute each caller's enclosing class for strategy 0a.
-    let caller_class: HashMap<SymbolId, SymbolId> = ordered
+    let caller_class: FxHashMap<SymbolId, SymbolId> = ordered
         .iter()
         .filter_map(|(id, _)| enclosing_class(ir, *id).map(|c| (*id, c)))
         .collect();
 
     let mut decisions: Vec<(usize, CallTarget)> = Vec::new();
-    let mut memo: HashMap<(&str, &Path), Option<SymbolId>> = HashMap::new();
+    let mut memo: FxHashMap<(&str, &Path), Option<SymbolId>> = FxHashMap::default();
 
     for (idx, call) in ir.calls.iter().enumerate() {
         if let CallTarget::Unresolved(name) = &call.callee {

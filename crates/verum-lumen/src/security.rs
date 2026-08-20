@@ -1,5 +1,3 @@
-use std::io::BufRead;
-
 use rayon::prelude::*;
 use regex::Regex;
 
@@ -266,7 +264,23 @@ fn classify_weak_crypto_severity(line: &str) -> Severity {
 }
 
 /// Pattern-based scan of file contents plus taint-path findings.
+///
+/// Reads every file itself; prefer [`analyse_with_context`] when a pre-read
+/// [`ScanContext`](crate::scan::ScanContext) is already available.
 pub fn analyse(ir: &Ir, config: &SecurityConfig) -> Vec<Finding> {
+    analyse_with_context(ir, config, &crate::scan::ScanContext::index_only(ir))
+}
+
+/// Pattern-based scan over the shared [`ScanContext`](crate::scan::ScanContext)
+/// lines, so the tree is read once for all line-scanning passes instead of
+/// once per pass. Findings are identical to [`analyse`]: the context's line
+/// splitting matches the `std::fs::read` + `BufRead::lines` shape this pass
+/// used to do itself.
+pub fn analyse_with_context(
+    ir: &Ir,
+    config: &SecurityConfig,
+    ctx: &crate::scan::ScanContext,
+) -> Vec<Finding> {
     let mut findings = Vec::new();
 
     // `[:=]` covers PHP/Go/Rust assignments, JS object literals, Python dicts
@@ -336,29 +350,25 @@ pub fn analyse(ir: &Ir, config: &SecurityConfig) -> Vec<Finding> {
                 return findings;
             }
 
-            let content = match std::fs::read(path) {
-                Ok(c) => c,
-                Err(_) => return findings,
+            let Some(lines) = ctx.lines(path) else {
+                return findings;
             };
 
-            for (line_idx, line_result) in content.lines().enumerate() {
-                let line = match line_result {
-                    Ok(l) => l,
-                    Err(_) => continue,
-                };
+            for (line_idx, line) in lines.iter().enumerate() {
+                let line = line.as_str();
                 let line_num = (line_idx + 1) as u32;
 
                 // md5 and sha1 are checked independently so a line containing both
                 // reports both.
                 let weak_funcs: &[(&str, &str)] = if dynamic_lang { WEAK_FUNCS } else { &[] };
                 for &(func, pattern) in weak_funcs {
-                    if !contains_at_word_start(&line, pattern) {
+                    if !contains_at_word_start(line, pattern) {
                         continue;
                     }
 
                     // Comment-only lines never flag, even when the function is on
                     // the forbid list (`// TODO: replace md5($pw)` is not a call).
-                    if is_comment_line(&line) {
+                    if is_comment_line(line) {
                         continue;
                     }
 
@@ -380,7 +390,7 @@ pub fn analyse(ir: &Ir, config: &SecurityConfig) -> Vec<Finding> {
                     let severity = if is_always_forbidden {
                         Severity::Critical
                     } else {
-                        classify_weak_crypto_severity(&line)
+                        classify_weak_crypto_severity(line)
                     };
 
                     // Info = benign context, don't flag.
@@ -424,7 +434,7 @@ pub fn analyse(ir: &Ir, config: &SecurityConfig) -> Vec<Finding> {
                 // Other always-forbidden crypto (des, rc4, ...). Word-boundary check
                 // so "des(" inside "includes(" doesn't match.
                 for (forbidden, pattern) in forbid_patterns.iter().filter(|_| dynamic_lang) {
-                    if is_comment_line(&line) {
+                    if is_comment_line(line) {
                         break;
                     }
                     {
@@ -460,8 +470,8 @@ pub fn analyse(ir: &Ir, config: &SecurityConfig) -> Vec<Finding> {
                     }
                 }
 
-                if dynamic_lang && contains_at_word_start(&line, "eval(") {
-                    if is_comment_line(&line) {
+                if dynamic_lang && contains_at_word_start(line, "eval(") {
+                    if is_comment_line(line) {
                         continue;
                     }
 
@@ -481,8 +491,8 @@ pub fn analyse(ir: &Ir, config: &SecurityConfig) -> Vec<Finding> {
                     });
                 }
 
-                if secret_re.is_match(&line) {
-                    if is_comment_line(&line) {
+                if secret_re.is_match(line) {
+                    if is_comment_line(line) {
                         continue;
                     }
 
@@ -499,20 +509,20 @@ pub fn analyse(ir: &Ir, config: &SecurityConfig) -> Vec<Finding> {
 
                     // Identifier-like literals (permission keys, config/route names)
                     // such as `= 'database.view_password'` aren't credentials.
-                    if quoted_value_is_identifier_like(&line) {
+                    if quoted_value_is_identifier_like(line) {
                         continue;
                     }
 
                     // Status/label strings that match the key pattern but report
                     // state rather than a value - `jwt_secret = "configured"`.
-                    if quoted_value_is_status_word(&line) {
+                    if quoted_value_is_status_word(line) {
                         continue;
                     }
 
                     // Templates / interpolated values (`ADMIN_TOKEN='{hash}'`,
                     // `"${x}"`, `%s`) emit a secret at runtime or are editor
                     // tokenizer patterns, not literal credentials.
-                    if quoted_value_is_template(&line) {
+                    if quoted_value_is_template(line) {
                         continue;
                     }
 

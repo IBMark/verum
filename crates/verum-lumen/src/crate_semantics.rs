@@ -9,7 +9,6 @@
 //! specific, defensible fact with a low false-positive shape.
 
 use std::collections::HashSet;
-use std::io::BufRead;
 use std::path::Path;
 
 use verum_nucleus::{Finding, FindingKind, Ir, Language, Severity};
@@ -80,7 +79,21 @@ const RULES: &[CrateRule] = &[
     },
 ];
 
+/// Reads every Rust file itself; prefer [`analyse_with_context`] when a
+/// pre-read [`ScanContext`](crate::scan::ScanContext) is already available.
 pub fn analyse(ir: &Ir, root: Option<&Path>) -> Vec<Finding> {
+    analyse_with_context(ir, root, &crate::scan::ScanContext::index_only(ir))
+}
+
+/// Rule matching over the shared [`ScanContext`](crate::scan::ScanContext)
+/// lines, so the tree is read once for all line-scanning passes. The
+/// file-scoped guard check runs per line; guards are single-line needles, so
+/// this matches the whole-content `contains` it replaces.
+pub fn analyse_with_context(
+    ir: &Ir,
+    root: Option<&Path>,
+    ctx: &crate::scan::ScanContext,
+) -> Vec<Finding> {
     let Some(root) = root else { return Vec::new() };
     let deps = read_dependency_names(root);
     if deps.is_empty() {
@@ -109,21 +122,23 @@ pub fn analyse(ir: &Ir, root: Option<&Path>) -> Vec<Finding> {
         if path_str.contains("/target/") {
             continue;
         }
-        let Ok(raw) = std::fs::read(path) else {
+        let Some(lines) = ctx.lines(path) else {
             continue;
         };
-        let content = String::from_utf8_lossy(&raw);
         // File-scoped guards: if a rule's guard appears anywhere in the file,
         // the author has already handled that behaviour - suppress the rule
-        // for the whole file.
+        // for the whole file. Guards are single-line needles, so a per-line
+        // scan finds exactly what a whole-content `contains` did.
         let file_rules: Vec<&&CrateRule> = active
             .iter()
-            .filter(|r| !r.guard.is_some_and(|g| content.contains(g)))
+            .filter(|r| {
+                !r.guard
+                    .is_some_and(|g| lines.iter().any(|line| line.contains(g)))
+            })
             .collect();
         if file_rules.is_empty() {
             continue;
         }
-        let lines: Vec<String> = raw.lines().map(|l| l.unwrap_or_default()).collect();
         for (idx, line) in lines.iter().enumerate() {
             let trimmed = line.trim_start();
             if trimmed.starts_with("//") || trimmed.starts_with('*') {

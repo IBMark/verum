@@ -14,13 +14,7 @@ pub fn parse_file(path: &Path) -> Result<Ir> {
     let source =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
 
-    let mut parser = tree_sitter::Parser::new();
-    parser
-        .set_language(&tree_sitter_go::LANGUAGE.into())
-        .map_err(|e| anyhow::anyhow!("Failed to set Go language: {}", e))?;
-
-    let tree = parser
-        .parse(&source, None)
+    let tree = crate::parser_pool::parse("go", || tree_sitter_go::LANGUAGE.into(), &source)
         .ok_or_else(|| anyhow::anyhow!("Failed to parse {}", path.display()))?;
 
     let mut extractor = GoExtractor {

@@ -19,7 +19,9 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 rayon = { workspace = true }
 walkdir = { workspace = true }
+ignore = { workspace = true }
 ahash = { workspace = true }
+rustc-hash = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-php = "0.24"
 tree-sitter-rust = "0.24"
