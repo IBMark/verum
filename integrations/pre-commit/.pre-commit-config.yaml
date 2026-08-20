@@ -1,0 +1,35 @@
+# Verum deploy gate as a pre-commit hook.
+#
+# pre-commit stashes unstaged work before running hooks, so `verum gate .` sees
+# exactly the tree that is about to be committed. Verum is a whole-program
+# analyzer - dead code and cross-file taint are only decidable over the whole
+# tree - so `pass_filenames: false` is deliberate: the `files:` pattern decides
+# *whether* to run, the analysis itself always covers the repository.
+#
+# Fail behaviour: `verum gate` exits 1 when the deploy gate fails, which aborts
+# the commit and prints the reasons. `git commit --no-verify` bypasses it. On an
+# existing codebase run `verum baseline .` once and commit the result, and the
+# gate then fails only on findings introduced after that snapshot.
+#
+# Verum also publishes itself as a hook repository, so if you would rather not
+# vendor this definition:
+#
+#   repos:
+#     - repo: https://github.com/IBMark/verum
+#       rev: v0.1.5
+#       hooks:
+#         - id: verum-gate
+#
+# That published hook uses `always_run: true`; the local copy below runs only
+# when a source file is staged. Both need `verum` on PATH (`language: system`).
+repos:
+  - repo: local
+    hooks:
+      - id: verum-gate
+        name: verum gate
+        description: Deterministic whole-program analysis; blocks the commit if the deploy gate fails.
+        entry: verum gate .
+        language: system
+        pass_filenames: false
+        require_serial: true
+        files: '\.(rs|py|go|php|java|[cm]?[jt]sx?|tf|ya?ml)$|(^|/)Dockerfile[^/]*$'

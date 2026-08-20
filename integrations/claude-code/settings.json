@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 120,
+            "command": "out=$(verum gate \"$CLAUDE_PROJECT_DIR\" 2>&1) || { printf '%s\\n' \"$out\" >&2; exit 2; }"
+          }
+        ]
+      }
+    ]
+  }
+}

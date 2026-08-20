@@ -16,6 +16,16 @@ All notable changes to this project are documented here. The format is based on
   score moves.
 
 ### Added
+- `docs/agents.md`, a machine-oriented command reference written to be read
+  in-context by a coding agent: one screen per command with when to use it, the
+  exact invocation, the JSON schema field by field, the exit codes, and a worked
+  example of real output. A test asserts every flag it documents against
+  `--help` in both directions, so the reference cannot drift from the CLI.
+- `integrations/`, ready-to-copy configuration for wiring Verum into the places
+  code changes: a Claude Code `PostToolUse` hook (plus `.mcp.json` registration),
+  a Cursor rule, a `pre-commit` hook, and a GitHub Actions workflow that uploads
+  SARIF to code scanning and runs the gate. Every snippet is syntax-checked in
+  CI and asserted to invoke commands that exist.
 - Line-of-code metrics in `report`: total, code, comment and blank lines per
   file, rolled up per language and per top-level directory, with an nyc-style
   per-file table in the markdown report and a `loc` section in the JSON.
