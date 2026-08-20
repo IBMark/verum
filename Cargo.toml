@@ -50,3 +50,7 @@ console = "0.16"
 colored = "3"
 tree-sitter = "0.26"
 serde_yaml = "0.9"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
