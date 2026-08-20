@@ -224,6 +224,12 @@ pub struct Ir {
     /// Infrastructure findings produced by infra parsers (K8s, Docker, Terraform).
     /// These are collected by Prism during analysis.
     pub infra_findings: Vec<Finding>,
+    /// [`FindingKind::ParseFailure`] diagnostics for files whose parse
+    /// panicked and was isolated (see [`panic_guard`]). Collected by Prism
+    /// during analysis. `serde(default)` so IR snapshots written before this
+    /// field existed still load.
+    #[serde(default)]
+    pub parse_failures: Vec<Finding>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -256,6 +262,7 @@ impl Ir {
         self.http_call_candidates.extend(other.http_call_candidates);
         self.entry_points.extend(other.entry_points);
         self.infra_findings.extend(other.infra_findings);
+        self.parse_failures.extend(other.parse_failures);
         self.metadata.total_files += other.metadata.total_files;
         self.metadata.total_lines += other.metadata.total_lines;
         self.metadata.total_symbols += other.metadata.total_symbols;
@@ -387,6 +394,13 @@ pub enum FindingKind {
     /// nonce with the same key breaks confidentiality (and, for most AEAD
     /// modes, integrity) of every message encrypted under it.
     StaticAeadNonce,
+    /// Per-file parse or analysis work panicked on this file and was isolated;
+    /// the rest of the run continued without it. Diagnostic only - it carries
+    /// no score penalty and never gates a deploy. The message is a fixed
+    /// phrase plus the file path, never the panic payload: payloads embed
+    /// source locations and formatting that vary across rustc versions, and
+    /// identical inputs must produce byte-identical findings.
+    ParseFailure,
 }
 
 /// A performance objective a codebase can be optimised for.
@@ -448,6 +462,37 @@ pub struct Finding {
     pub suggestion: String,
     pub auto_fixable: bool,
     pub related: Vec<Location>,
+}
+
+impl Finding {
+    /// The diagnostic emitted when per-file work on `path` panicked and was
+    /// isolated by [`panic_guard::catch`].
+    ///
+    /// `what` must be a FIXED phrase (the mapper uses "parser panicked on
+    /// this file", the analysis passes "analysis panicked on this file").
+    /// Nothing from the panic payload is ever included: payloads carry
+    /// source locations, addresses and formatting that differ across rustc
+    /// versions and builds, and identical inputs must produce byte-identical
+    /// findings.
+    pub fn parse_failure(path: &std::path::Path, what: &str) -> Finding {
+        Finding {
+            id: format!("parse-failure-{}", path.display()),
+            kind: FindingKind::ParseFailure,
+            severity: Severity::Low,
+            confidence: 1.0,
+            file: path.to_path_buf(),
+            line_start: 0,
+            line_end: 0,
+            symbol: None,
+            message: format!("{what}: {}", path.display()),
+            suggestion: "the file was skipped after the panic was isolated; the rest of the \
+                         scan is complete - inspect the file by hand and report it as a \
+                         parser bug"
+                .to_string(),
+            auto_fixable: false,
+            related: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -570,4 +615,108 @@ pub struct PipelineResult {
     pub duration_ms: u64,
     pub deploy_gate_passed: bool,
     pub deploy_gate_reasons: Vec<String>,
+}
+
+/// Panic isolation for per-file work.
+///
+/// A fleet scan over tens of thousands of untrusted repositories must never
+/// let one pathological file abort a run: the mapper's parse loop and the
+/// per-file analysis loops wrap each file's work in [`panic_guard::catch`],
+/// which converts a panic into `None` so the caller can record a
+/// [`FindingKind::ParseFailure`] diagnostic and continue with every other
+/// file's results intact.
+///
+/// The default panic hook prints its report to stderr the moment a panic
+/// starts unwinding - long before `catch_unwind` ever sees it - which would
+/// interleave spurious backtraces into parallel output for panics that are
+/// fully handled. [`catch`] therefore marks its thread as silenced for the
+/// duration of the closure; a process-wide hook (installed once, delegating
+/// to whatever hook was set before it) drops the report for silenced threads
+/// and behaves exactly as before everywhere else, so an *unexpected* panic
+/// outside the guard still reports normally.
+pub mod panic_guard {
+    use std::cell::Cell;
+    use std::panic::{self, AssertUnwindSafe};
+    use std::sync::Once;
+
+    thread_local! {
+        /// True while THIS thread is inside [`catch`]; consulted by the
+        /// process-wide hook. Thread-local rather than global so concurrent
+        /// guarded and unguarded work never silence each other.
+        static SILENCED: Cell<bool> = const { Cell::new(false) };
+    }
+
+    static INSTALL_HOOK: Once = Once::new();
+
+    fn install_hook() {
+        INSTALL_HOOK.call_once(|| {
+            let previous = panic::take_hook();
+            panic::set_hook(Box::new(move |info| {
+                if !SILENCED.with(Cell::get) {
+                    previous(info);
+                }
+            }));
+        });
+    }
+
+    /// Run `f`, converting a panic into `None` and suppressing the default
+    /// panic-hook stderr report for it. The previously installed hook is
+    /// preserved (the silencing hook delegates to it), so panics outside a
+    /// guarded section report exactly as before.
+    ///
+    /// The panic payload is deliberately discarded: payloads embed source
+    /// locations and formatting that vary across rustc versions and builds,
+    /// and anything derived from them would leak nondeterminism into
+    /// findings. Callers emit [`crate::Finding::parse_failure`] with a fixed
+    /// phrase instead.
+    ///
+    /// On the `AssertUnwindSafe`: every call site runs a closure that builds
+    /// a fresh per-file result from shared *read-only* inputs (`&Ir`, config,
+    /// pre-read lines). On panic that partial result is dropped wholesale, so
+    /// no half-mutated state survives to be observed.
+    pub fn catch<R>(f: impl FnOnce() -> R) -> Option<R> {
+        install_hook();
+        SILENCED.with(|s| s.set(true));
+        let result = panic::catch_unwind(AssertUnwindSafe(f));
+        SILENCED.with(|s| s.set(false));
+        result.ok()
+    }
+}
+
+#[cfg(test)]
+mod panic_guard_tests {
+    use super::*;
+
+    #[test]
+    fn catch_returns_the_value_when_nothing_panics() {
+        assert_eq!(panic_guard::catch(|| 41 + 1), Some(42));
+    }
+
+    #[test]
+    fn catch_converts_a_panic_into_none() {
+        let caught: Option<()> = panic_guard::catch(|| panic!("deliberate test panic"));
+        assert!(caught.is_none());
+    }
+
+    #[test]
+    fn catch_recovers_for_subsequent_work_on_the_same_thread() {
+        // A caught panic must leave the thread fully usable: the silencing
+        // flag is cleared and later guarded work still returns values.
+        let _: Option<()> = panic_guard::catch(|| panic!("first"));
+        assert_eq!(panic_guard::catch(|| "still fine"), Some("still fine"));
+    }
+
+    #[test]
+    fn parse_failure_finding_is_fixed_and_deterministic() {
+        let path = std::path::Path::new("src/broken.rs");
+        let a = Finding::parse_failure(path, "parser panicked on this file");
+        let b = Finding::parse_failure(path, "parser panicked on this file");
+        assert_eq!(a.id, b.id);
+        assert_eq!(a.message, "parser panicked on this file: src/broken.rs");
+        assert_eq!(a.kind, FindingKind::ParseFailure);
+        assert_eq!(a.severity, Severity::Low);
+        // The message must never embed panic payload text, which varies
+        // across rustc versions; only the fixed phrase and the path appear.
+        assert!(!a.message.contains("panicked at"));
+    }
 }

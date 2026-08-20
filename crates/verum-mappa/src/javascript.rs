@@ -54,6 +54,7 @@ pub fn parse_source(
     };
 
     let mut extractor = JsExtractor {
+        depth: 0,
         source: source.clone(),
         path: path.to_path_buf(),
         next_id: id_seed.unwrap_or_else(|| hash_path(path)),
@@ -94,6 +95,10 @@ pub fn parse_source(
 }
 
 struct JsExtractor {
+    /// Current `walk_node` recursion depth, checked against
+    /// [`crate::MAX_RECURSION_DEPTH`] so a pathologically deep AST cannot
+    /// overflow the stack (an abort no panic guard can catch).
+    depth: usize,
     source: String,
     path: std::path::PathBuf,
     next_id: u64,
@@ -131,7 +136,23 @@ impl JsExtractor {
         }
     }
 
+    /// Depth-capped dispatch. A hostile file (10k nested parens, a
+    /// megabyte-long `1+1+...` chain) parses into an AST deep enough that
+    /// recursive descent overflows the stack, and a stack overflow ABORTS
+    /// the process - no unwind, so the per-file panic guard cannot help.
+    /// Nodes deeper than the fixed cap are skipped; the cutoff depends
+    /// only on the input's AST shape (deterministic), and real code never
+    /// comes within an order of magnitude of the cap.
     fn walk_node(&mut self, node: tree_sitter::Node) {
+        if self.depth >= crate::MAX_RECURSION_DEPTH {
+            return;
+        }
+        self.depth += 1;
+        self.walk_node_inner(node);
+        self.depth -= 1;
+    }
+
+    fn walk_node_inner(&mut self, node: tree_sitter::Node) {
         match node.kind() {
             "class_declaration" | "class" => self.handle_class(node),
             "method_definition" => self.handle_method(node),
@@ -203,7 +224,7 @@ impl JsExtractor {
                     }
                     // `import { X, Y, Z } from ...` - named imports
                     "import_clause" => {
-                        self.extract_import_clause_names(child, &mut imported_names);
+                        self.extract_import_clause_names(child, &mut imported_names, 0);
                     }
                     // `import * as Ns from ...`
                     "namespace_import" => {
@@ -243,7 +264,18 @@ impl JsExtractor {
         }
     }
 
-    fn extract_import_clause_names(&self, node: tree_sitter::Node, names: &mut Vec<String>) {
+    /// Depth-capped: the catch-all arm recurses into unrecognized children,
+    /// so a hostile or error-recovery import clause could otherwise nest to
+    /// the input's depth. Anything past the cap is skipped deterministically.
+    fn extract_import_clause_names(
+        &self,
+        node: tree_sitter::Node,
+        names: &mut Vec<String>,
+        depth: usize,
+    ) {
+        if depth >= crate::MAX_RECURSION_DEPTH {
+            return;
+        }
         for i in 0..node.child_count() {
             if let Some(child) = node.child(i as u32) {
                 match child.kind() {
@@ -289,7 +321,7 @@ impl JsExtractor {
                         }
                     }
                     _ => {
-                        self.extract_import_clause_names(child, names);
+                        self.extract_import_clause_names(child, names, depth + 1);
                     }
                 }
             }

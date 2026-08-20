@@ -160,6 +160,10 @@ fn kind_survives_in_auxiliary(kind: &FindingKind) -> bool {
             | FindingKind::PciViolation
             | FindingKind::GdprViolation
             | FindingKind::Soc2Violation
+            // A panic that had to be isolated is a fact about the run itself;
+            // suppressing it in a vendored or test file would hide that the
+            // scan of that file is incomplete.
+            | FindingKind::ParseFailure
     )
 }
 
@@ -403,6 +407,10 @@ impl Prism {
         findings.extend(rbac_f);
         findings.extend(infrastructure_f);
         findings.extend(chains_f);
+        // Parse-failure diagnostics recorded by the mapper when a per-file
+        // parse panicked and was isolated. Appended in the fixed merge order
+        // like every pass slot; the global sort below normalizes placement.
+        findings.extend(ir.parse_failures.iter().cloned());
 
         // Drop source-hygiene and security findings that land in test, example,
         // vendored, or generated files - they are noise, not shipped-code

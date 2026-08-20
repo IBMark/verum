@@ -20,7 +20,9 @@ use std::time::Instant;
 use anyhow::Result;
 use rayon::prelude::*;
 
-use verum_nucleus::{matchable_path, FileId, FileInfo, Framework, Ir, Language, SymbolId};
+use verum_nucleus::{
+    matchable_path, panic_guard, FileId, FileInfo, Finding, Framework, Ir, Language, SymbolId,
+};
 
 /// Deterministic string hash (FNV-1a) for symbol/file ids and source hashes.
 /// ahash - even `AHasher::default()` - is seeded per process, so ids and
@@ -211,13 +213,20 @@ impl Atlas {
         tracing::info!("Collected {} files", files.len());
         mark = profile_phase(profile, "walk", mark);
 
+        // Each file parses under the panic guard: a malformed file that
+        // panics an extractor becomes a ParseFailure diagnostic instead of
+        // taking down the whole run (see `verum_nucleus::panic_guard`).
         let partial_irs: Vec<Ir> = files
             .par_iter()
-            .filter_map(|path| match self.parse_file(path) {
-                Ok(ir) => Some(ir),
-                Err(e) => {
+            .filter_map(|path| match panic_guard::catch(|| self.parse_file(path)) {
+                Some(Ok(ir)) => Some(ir),
+                Some(Err(e)) => {
                     tracing::warn!("Failed to parse {}: {}", path.display(), e);
                     None
+                }
+                None => {
+                    tracing::warn!("Parser panicked on {}; file isolated", path.display());
+                    Some(parse_failure_ir(path))
                 }
             })
             .collect();
@@ -233,13 +242,22 @@ impl Atlas {
             tracing::info!("Collected {} infrastructure files", infra_files.len());
             let infra_irs: Vec<Ir> = infra_files
                 .par_iter()
-                .filter_map(|path| match self.parse_infra_file(path) {
-                    Ok(partial) => Some(partial),
-                    Err(e) => {
-                        tracing::warn!("Failed to parse infra file {}: {}", path.display(), e);
-                        None
-                    }
-                })
+                .filter_map(
+                    |path| match panic_guard::catch(|| self.parse_infra_file(path)) {
+                        Some(Ok(partial)) => Some(partial),
+                        Some(Err(e)) => {
+                            tracing::warn!("Failed to parse infra file {}: {}", path.display(), e);
+                            None
+                        }
+                        None => {
+                            tracing::warn!(
+                                "Parser panicked on infra file {}; file isolated",
+                                path.display()
+                            );
+                            Some(parse_failure_ir(path))
+                        }
+                    },
+                )
                 .collect();
             for partial in infra_irs {
                 ir.merge(partial);
@@ -432,6 +450,15 @@ impl Atlas {
 
     /// Parse a single file into a partial IR, detecting language from extension.
     fn parse_file(&self, path: &Path) -> Result<Ir> {
+        // Test-only hook: this exact file name forces a panic inside the
+        // guarded parse loop so the isolation path is testable end to end
+        // without depending on a live parser bug. Compiled out of every
+        // non-test build.
+        #[cfg(test)]
+        if path.file_name().and_then(|n| n.to_str()) == Some("__verum_panic_hook__.rs") {
+            panic!("deliberate test-only parse panic");
+        }
+
         let ext = path.extension().and_then(|e| e.to_str());
 
         // HTML shares the JavaScript language tag (its inline scripts are JS),
@@ -486,6 +513,37 @@ impl Atlas {
 /// [`Atlas::collect_all`]). 5 MiB: no hand-written source file reaches this;
 /// generated bundles, test corpora and data files do.
 const MAX_SOURCE_FILE_BYTES: u64 = 5 * 1024 * 1024;
+
+/// Maximum depth any recursive extractor walk descends into an AST (or a
+/// nested `use` group).
+///
+/// A hostile file - 10k nested parens, or a megabyte-long `1+1+...` chain -
+/// parses into a tree whose depth tracks the input, and recursive descent
+/// over it overflows the thread's stack. Unlike a panic, a stack overflow
+/// ABORTS the process: `catch_unwind` never runs, so the per-file panic
+/// guard cannot contain it. The walkers therefore stop descending at this
+/// fixed depth and skip anything deeper.
+///
+/// Deterministic by construction: the cutoff depends only on the input's
+/// tree shape, never on wall-clock time or stack headroom, so identical
+/// inputs truncate identically on every machine. Hand-written code nests a
+/// few dozen levels at most; 512 leaves an order of magnitude of margin
+/// while bounding worst-case stack use well inside the smallest (2 MiB)
+/// worker stacks.
+pub(crate) const MAX_RECURSION_DEPTH: usize = 512;
+
+/// The partial IR recording that `path`'s parse panicked and was isolated.
+/// No symbols are extracted (the parser cannot be trusted on this input), but
+/// the diagnostic rides the normal IR merge so the finding surfaces in every
+/// report. The message is a fixed phrase - never the panic payload - so
+/// identical inputs produce byte-identical findings (see
+/// [`Finding::parse_failure`]).
+fn parse_failure_ir(path: &Path) -> Ir {
+    let mut ir = Ir::new();
+    ir.parse_failures
+        .push(Finding::parse_failure(path, "parser panicked on this file"));
+    ir
+}
 
 /// True when the first 8 KiB contain a NUL byte - the standard cheap test for
 /// binary content (git uses the same heuristic). Read errors are not treated
@@ -734,4 +792,100 @@ fn detect_entry_points(ir: &mut Ir) {
     }
 
     ir.entry_points.extend(entry_point_ids);
+}
+
+#[cfg(test)]
+mod panic_isolation_tests {
+    use super::*;
+
+    /// A scratch tree that removes itself when dropped, so a failing assert
+    /// never leaves litter in the system temp directory.
+    struct ScratchTree(PathBuf);
+
+    impl ScratchTree {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "verum_mappa_{}_{}_{}",
+                tag,
+                std::process::id(),
+                std::thread::current()
+                    .name()
+                    .unwrap_or("t")
+                    .replace("::", "_"),
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("create scratch dir");
+            Self(dir)
+        }
+    }
+
+    impl Drop for ScratchTree {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_panicking_parse_is_isolated_and_reported() {
+        let tree = ScratchTree::new("panic_hook");
+        // The hook file trips the test-only panic in `parse_file`; the healthy
+        // neighbour proves the run continued past the isolated file.
+        std::fs::write(tree.0.join("__verum_panic_hook__.rs"), "fn broken() {}\n")
+            .expect("write hook file");
+        std::fs::write(
+            tree.0.join("healthy.rs"),
+            "pub fn fine() { helper(); }\nfn helper() {}\n",
+        )
+        .expect("write healthy file");
+
+        let ir = Atlas::new(AtlasConfig {
+            root: tree.0.clone(),
+            language: Language::Rust,
+            ..Default::default()
+        })
+        .build()
+        .expect("the run must complete despite the panicking file");
+
+        assert_eq!(
+            ir.parse_failures.len(),
+            1,
+            "exactly the hook file is isolated"
+        );
+        let failure = &ir.parse_failures[0];
+        assert_eq!(failure.kind, verum_nucleus::FindingKind::ParseFailure);
+        assert_eq!(failure.severity, verum_nucleus::Severity::Low);
+        assert!(
+            failure
+                .message
+                .starts_with("parser panicked on this file: "),
+            "fixed phrase, never the panic payload: {}",
+            failure.message
+        );
+        assert!(failure.message.ends_with("__verum_panic_hook__.rs"));
+        assert!(
+            !failure.message.contains("deliberate test-only"),
+            "the panic payload must not leak into the finding"
+        );
+        // The healthy file parsed normally.
+        assert!(
+            ir.symbols.values().any(|s| s.name == "fine"),
+            "the rest of the tree still maps"
+        );
+    }
+
+    #[test]
+    fn a_clean_tree_reports_no_parse_failures() {
+        let tree = ScratchTree::new("clean");
+        std::fs::write(tree.0.join("lib.rs"), "pub fn ok() {}\n").expect("write file");
+
+        let ir = Atlas::new(AtlasConfig {
+            root: tree.0.clone(),
+            language: Language::Rust,
+            ..Default::default()
+        })
+        .build()
+        .expect("clean tree builds");
+
+        assert!(ir.parse_failures.is_empty());
+    }
 }

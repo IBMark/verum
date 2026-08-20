@@ -381,6 +381,7 @@ fn finding_kind_label(k: &FindingKind) -> &'static str {
         FindingKind::UnvalidatedLengthPrefix => "UnvalidatedLengthPrefix",
         FindingKind::NonConstantTimeComparison => "NonConstantTimeComparison",
         FindingKind::StaticAeadNonce => "StaticAeadNonce",
+        FindingKind::ParseFailure => "ParseFailure",
     }
 }
 
@@ -794,6 +795,27 @@ fn print_audit_results(result: &PrismResult) {
                 "->".cyan(),
                 chains.len() - 12
             );
+        }
+    }
+
+    // Files whose parse/analysis panicked and was isolated - the scan
+    // completed without them. Diagnostic only: no score impact, no gate.
+    let parse_failures: Vec<&Finding> = result
+        .findings
+        .iter()
+        .filter(|f| f.kind == FindingKind::ParseFailure)
+        .collect();
+    if !parse_failures.is_empty() {
+        println!(
+            "  {}  Parse failures: {} file(s) isolated",
+            "⚠".yellow(),
+            parse_failures.len()
+        );
+        for f in parse_failures.iter().take(10) {
+            println!("     {} {}", "⚠".yellow(), f.message);
+        }
+        if parse_failures.len() > 10 {
+            println!("     ... {} more (see report)", parse_failures.len() - 10);
         }
     }
 
@@ -1464,9 +1486,13 @@ fn finding_fingerprint(f: &Finding, root: &Path) -> String {
 
 /// Findings that represent the analysis surface a baseline should track.
 /// Informational map/insight surfaces are excluded - a baseline is about
-/// must-look findings, not the exploratory notes.
+/// must-look findings, not the exploratory notes. Parse-failure diagnostics
+/// describe the run, not the code, so they are excluded too.
 fn is_baselineable(f: &Finding) -> bool {
-    !is_chain(&f.kind) && !is_rust_insight(&f.kind) && f.kind != FindingKind::CrateApiMisuse
+    !is_chain(&f.kind)
+        && !is_rust_insight(&f.kind)
+        && f.kind != FindingKind::CrateApiMisuse
+        && f.kind != FindingKind::ParseFailure
 }
 
 fn load_baseline(root: &Path) -> Option<std::collections::HashSet<String>> {

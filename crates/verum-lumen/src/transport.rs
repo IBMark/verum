@@ -157,7 +157,7 @@ pub fn analyse_with_context(ir: &Ir, ctx: &ScanContext) -> Vec<Finding> {
     let per_file: Vec<Vec<Finding>> = files
         .par_iter()
         .map(|path| {
-            let mut file_findings = Vec::new();
+            let file_findings = Vec::new();
             let path_str = matchable_path(path);
             if path_str.contains("/target/")
                 || path_str.contains("node_modules/")
@@ -196,8 +196,19 @@ pub fn analyse_with_context(ir: &Ir, ctx: &ScanContext) -> Vec<Finding> {
                 .collect();
             spans.sort_by_key(|s| (s.start, s.end));
 
-            analyse_file(path, &lines, &spans, &mut file_findings);
-            file_findings
+            // One hostile file must not panic the whole pass: analyse under
+            // the panic guard and downgrade a panic to a diagnostic finding.
+            match verum_nucleus::panic_guard::catch(|| {
+                let mut file_findings = Vec::new();
+                analyse_file(path, &lines, &spans, &mut file_findings);
+                file_findings
+            }) {
+                Some(file_findings) => file_findings,
+                None => vec![Finding::parse_failure(
+                    path,
+                    "analysis panicked on this file",
+                )],
+            }
         })
         .collect();
     for file_findings in per_file {
@@ -217,9 +228,13 @@ fn analyse_file(path: &Path, lines: &[String], spans: &[FnSpan], findings: &mut 
         .enumerate()
         .map(|(idx, l)| {
             let line_num = (idx + 1) as u32;
-            if test_ranges
-                .iter()
-                .any(|(a, b)| line_num >= *a && line_num <= *b)
+            // Overlong lines are generated blobs; the detectors below do
+            // per-occurrence context extraction, so skip them (deterministic
+            // input-size guard, see `scan::MAX_SCAN_LINE_BYTES`).
+            if l.len() > crate::scan::MAX_SCAN_LINE_BYTES
+                || test_ranges
+                    .iter()
+                    .any(|(a, b)| line_num >= *a && line_num <= *b)
             {
                 String::new()
             } else {

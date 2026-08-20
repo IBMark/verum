@@ -178,6 +178,7 @@ struct TaintedArgCall {
     caller: Option<SymbolId>,
 }
 
+#[derive(Default)]
 struct FileScan {
     detections: Vec<Detection>,
     tainted_arg_calls: Vec<TaintedArgCall>,
@@ -300,19 +301,33 @@ pub fn analyse_with_context(ir: &Ir, ctx: &ScanContext) -> (Vec<Finding>, Vec<Ta
     // One entry per `contents` entry, in the same order; the two are zipped
     // below rather than each carrying its own copy of the path.
     let mut scans: Vec<FileScan> = Vec::new();
+    // Files whose scan panicked and was isolated; a BTreeSet so the resulting
+    // diagnostics come out in path order regardless of which round tripped.
+    let mut panicked: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
     for round in 0..3 {
         scans.clear();
         let mut next_tainted: HashSet<String> = HashSet::new();
         for (path, lang, lines, spans) in &contents {
-            let scan = scan_file(
-                path,
-                *lang,
-                lines,
-                spans,
-                &tainted_return_fns,
-                &assign_re,
-                &call_re,
-            );
+            // One hostile file must not panic the whole pass: scan under the
+            // panic guard; a panicking file contributes an empty scan (and a
+            // diagnostic finding below) while every other file proceeds.
+            let scan = match verum_nucleus::panic_guard::catch(|| {
+                scan_file(
+                    path,
+                    *lang,
+                    lines,
+                    spans,
+                    &tainted_return_fns,
+                    &assign_re,
+                    &call_re,
+                )
+            }) {
+                Some(scan) => scan,
+                None => {
+                    panicked.insert(path.clone());
+                    FileScan::default()
+                }
+            };
             for (sym, fact) in &scan.facts {
                 if fact.returns_tainted {
                     if let Some(s) = ir.symbols.get(sym) {
@@ -476,6 +491,15 @@ pub fn analyse_with_context(ir: &Ir, ctx: &ScanContext) -> (Vec<Finding>, Vec<Ta
         }
     }
 
+    // One diagnostic per isolated file, in path order (the set deduplicates
+    // across fixpoint rounds).
+    for path in &panicked {
+        findings.push(Finding::parse_failure(
+            path,
+            "analysis panicked on this file",
+        ));
+    }
+
     (findings, paths)
 }
 
@@ -578,6 +602,12 @@ fn scan_file(
 
     for (idx, line) in lines.iter().enumerate() {
         let line_num = (idx + 1) as u32;
+        // Overlong lines are generated blobs, and the tainted-variable check
+        // below rescans every tracked name against the line - skip them
+        // (deterministic input-size guard, see `scan::MAX_SCAN_LINE_BYTES`).
+        if line.len() > crate::scan::MAX_SCAN_LINE_BYTES {
+            continue;
+        }
         let trimmed = line.trim();
         if trimmed.starts_with("//") || trimmed.starts_with('*') || trimmed.starts_with('#') {
             continue;
@@ -598,10 +628,10 @@ fn scan_file(
 
         if lang == ScanLang::Rust {
             for caps in rust_extractor.captures_iter(line) {
-                tainted.insert(caps[1].to_string());
+                track_tainted(&mut tainted, caps[1].to_string());
             }
             for caps in rust_read_into.captures_iter(line) {
-                tainted.insert(caps[1].to_string());
+                track_tainted(&mut tainted, caps[1].to_string());
             }
         }
 
@@ -752,7 +782,7 @@ fn scan_file(
                 .iter()
                 .any(|f| contains_at_word_start(after_eq, &format!("{}(", f)));
             if (direct_source || from_tainted_return) && !has_sanitizer {
-                tainted.insert(var);
+                track_tainted(&mut tainted, var);
             } else if !is_compound
                 && (has_sanitizer || (!direct_source && tainted_var_used.is_none()))
             {
@@ -760,7 +790,7 @@ fn scan_file(
                 tainted.remove(&var);
             } else if tainted_var_used.is_some() && !has_sanitizer {
                 // Propagation: $b = $a . "x" where $a is tainted.
-                tainted.insert(var);
+                track_tainted(&mut tainted, var);
             }
         }
     }
@@ -769,6 +799,24 @@ fn scan_file(
         detections,
         tainted_arg_calls,
         facts: facts.into_iter().collect(),
+    }
+}
+
+/// Cap on tainted variable names tracked per file.
+///
+/// Every scanned line is checked against every tracked name, so tracked state
+/// growing without bound on generated code (tens of thousands of variables
+/// assigned from a source) turns the scan quadratic. Real code tracks a
+/// handful of names per function. The cap is a fixed constant applied in
+/// line order - first-seen names win - so it depends only on the input and
+/// identical inputs always track the identical set.
+const MAX_TRACKED_TAINTED_VARS: usize = 512;
+
+/// Insert `var` into the tracked set unless the fixed cap is reached
+/// (re-inserting an already-tracked name is always allowed).
+fn track_tainted(tainted: &mut HashSet<String>, var: String) {
+    if tainted.len() < MAX_TRACKED_TAINTED_VARS || tainted.contains(&var) {
+        tainted.insert(var);
     }
 }
 
@@ -856,6 +904,25 @@ mod tests {
         assert!(!contains_var("echo $identifier;", "id", true));
         assert!(contains_var("send(id)", "id", false));
         assert!(!contains_var("send(idx)", "id", false));
+    }
+
+    #[test]
+    fn tainted_var_tracking_is_capped_and_deterministic() {
+        let mut tainted = HashSet::new();
+        for i in 0..(MAX_TRACKED_TAINTED_VARS + 100) {
+            track_tainted(&mut tainted, format!("v{i}"));
+        }
+        assert_eq!(
+            tainted.len(),
+            MAX_TRACKED_TAINTED_VARS,
+            "first-seen names win; growth stops at the fixed cap"
+        );
+        // Names admitted before the cap stay re-insertable at the cap.
+        assert!(tainted.contains("v0"));
+        track_tainted(&mut tainted, "v0".to_string());
+        assert_eq!(tainted.len(), MAX_TRACKED_TAINTED_VARS);
+        // A name first seen past the cap is not tracked.
+        assert!(!tainted.contains(&format!("v{MAX_TRACKED_TAINTED_VARS}")));
     }
 
     #[test]

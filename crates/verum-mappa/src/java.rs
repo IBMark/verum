@@ -23,6 +23,7 @@ pub fn parse_file(path: &Path) -> Result<Ir> {
         .ok_or_else(|| anyhow::anyhow!("Failed to parse {}", path.display()))?;
 
     let mut extractor = JavaExtractor {
+        depth: 0,
         source: source.clone(),
         path: path.to_path_buf(),
         next_id: hash_path(path),
@@ -58,6 +59,10 @@ pub fn parse_file(path: &Path) -> Result<Ir> {
 }
 
 struct JavaExtractor {
+    /// Current `walk_node` recursion depth, checked against
+    /// [`crate::MAX_RECURSION_DEPTH`] so a pathologically deep AST cannot
+    /// overflow the stack (an abort no panic guard can catch).
+    depth: usize,
     source: String,
     path: std::path::PathBuf,
     next_id: u64,
@@ -158,7 +163,23 @@ impl JavaExtractor {
         }
     }
 
+    /// Depth-capped dispatch. A hostile file (10k nested parens, a
+    /// megabyte-long `1+1+...` chain) parses into an AST deep enough that
+    /// recursive descent overflows the stack, and a stack overflow ABORTS
+    /// the process - no unwind, so the per-file panic guard cannot help.
+    /// Nodes deeper than the fixed cap are skipped; the cutoff depends
+    /// only on the input's AST shape (deterministic), and real code never
+    /// comes within an order of magnitude of the cap.
     fn walk_node(&mut self, node: tree_sitter::Node) {
+        if self.depth >= crate::MAX_RECURSION_DEPTH {
+            return;
+        }
+        self.depth += 1;
+        self.walk_node_inner(node);
+        self.depth -= 1;
+    }
+
+    fn walk_node_inner(&mut self, node: tree_sitter::Node) {
         match node.kind() {
             "package_declaration" => {
                 // `package a.b.c;`
@@ -279,12 +300,12 @@ impl JavaExtractor {
         let line = node.start_position().row as u32 + 1;
         let col = node.start_position().column as u32;
         if let Some(sc) = node.child_by_field_name("superclass") {
-            for name in self.collect_type_names(sc) {
+            for name in self.collect_type_names(sc, 0) {
                 self.record_use(class_id, &name, line, col);
             }
         }
         if let Some(ifaces) = node.child_by_field_name("interfaces") {
-            for name in self.collect_type_names(ifaces) {
+            for name in self.collect_type_names(ifaces, 0) {
                 self.record_use(class_id, &name, line, col);
             }
         }
@@ -292,8 +313,14 @@ impl JavaExtractor {
 
     /// Collect head type names under a `superclass` / `super_interfaces` node,
     /// stripping generic arguments (`List<Foo>` -> `List`).
-    fn collect_type_names(&self, node: tree_sitter::Node) -> Vec<String> {
+    /// Depth-capped: `type_list` recursion is grammar-shallow on real code,
+    /// but an error-recovery tree from hostile input can nest arbitrarily.
+    /// Anything past the cap is skipped deterministically.
+    fn collect_type_names(&self, node: tree_sitter::Node, depth: usize) -> Vec<String> {
         let mut out = Vec::new();
+        if depth >= crate::MAX_RECURSION_DEPTH {
+            return out;
+        }
         for i in 0..node.named_child_count() {
             if let Some(child) = node.named_child(i as u32) {
                 match child.kind() {
@@ -306,7 +333,7 @@ impl JavaExtractor {
                         }
                     }
                     // `type_list` inside super_interfaces
-                    "type_list" => out.extend(self.collect_type_names(child)),
+                    "type_list" => out.extend(self.collect_type_names(child, depth + 1)),
                     _ => {}
                 }
             }
