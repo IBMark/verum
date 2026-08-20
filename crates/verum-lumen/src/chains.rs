@@ -72,6 +72,19 @@ pub fn analyse(ir: &Ir) -> Vec<Finding> {
     let index = build_name_index(ir);
     let adjacency = build_adjacency(ir, &index);
 
+    // Trust tiers depend only on the symbol's fq/file, so compute each once up
+    // front instead of re-deriving (format! + lowercase) per BFS edge visit.
+    let tiers: HashMap<SymbolId, Tier> = ir
+        .symbols
+        .iter()
+        .map(|(id, sym)| {
+            (
+                *id,
+                tier_of(&sym.fully_qualified, &sym.file.to_string_lossy()),
+            )
+        })
+        .collect();
+
     // Map a controller symbol -> route middleware, so a chain rooted at a route
     // inherits the route's auth gate (middleware like `auth`, `admin`, ...).
     let mut route_gate: HashMap<SymbolId, bool> = HashMap::new();
@@ -106,7 +119,15 @@ pub fn analyse(ir: &Ir) -> Vec<Finding> {
         if findings.len() >= MAX_CHAINS {
             break;
         }
-        walk_entry(ir, &adjacency, entry, &route_gate, &mut seen, &mut findings);
+        walk_entry(
+            ir,
+            &adjacency,
+            &tiers,
+            entry,
+            &route_gate,
+            &mut seen,
+            &mut findings,
+        );
     }
 
     findings.extend(taint_chains(ir));
@@ -119,6 +140,7 @@ pub fn analyse(ir: &Ir) -> Vec<Finding> {
 fn walk_entry(
     ir: &Ir,
     adjacency: &HashMap<SymbolId, Vec<Edge>>,
+    tiers: &HashMap<SymbolId, Tier>,
     entry: SymbolId,
     route_gate: &HashMap<SymbolId, bool>,
     seen: &mut HashSet<(u64, u8, String)>,
@@ -128,10 +150,7 @@ fn walk_entry(
         Some(s) => s,
         None => return,
     };
-    let entry_tier = tier_of(
-        &entry_sym.fully_qualified,
-        &entry_sym.file.to_string_lossy(),
-    );
+    let entry_tier = *tiers.get(&entry).unwrap_or(&Tier::Public);
     let entry_gated = *route_gate.get(&entry).unwrap_or(&false);
 
     // Each queue item carries the path of symbols and whether a gate was seen.
@@ -163,10 +182,9 @@ fn walk_entry(
 
         for edge in edges {
             // Inspect the callee name for sinks / gates regardless of resolution.
-            // Classification is gated by the entry point's language: the bare-name
-            // EXEC/SQL/FS/SSRF catalogs are PHP/JS/Python-shaped and would misfire
-            // on Rust/Go builder methods (e.g. a method literally named `passthru`).
-            if let Some(sink) = classify_sink(&edge.name, &edge.lang) {
+            // Classification depends only on (name, lang), so it was computed once
+            // per edge in build_adjacency instead of per BFS visit.
+            if let Some(sink) = edge.sink {
                 let key = (entry.0, sink as u8, edge.name.clone());
                 if seen.insert(key) {
                     if let Some(f) = make_chain_finding(
@@ -186,7 +204,7 @@ fn walk_entry(
                 continue;
             }
 
-            let now_gated = state.gated || name_is_gate(&edge.name);
+            let now_gated = state.gated || edge.is_gate;
 
             if let Some(callee) = edge.callee {
                 if state.path.len() >= MAX_DEPTH || !visited.insert(callee.0) {
@@ -196,8 +214,7 @@ fn walk_entry(
                 path.push(callee);
 
                 let mut crossed = state.crossed_to;
-                if let Some(cs) = ir.symbols.get(&callee) {
-                    let t = tier_of(&cs.fully_qualified, &cs.file.to_string_lossy());
+                if let Some(&t) = tiers.get(&callee) {
                     if t > entry_tier {
                         crossed = Some(crossed.map_or(t, |c| c.max(t)));
                     }
@@ -335,11 +352,13 @@ fn taint_chains(ir: &Ir) -> Vec<Finding> {
 struct Edge {
     callee: Option<SymbolId>,
     name: String,
-    /// Language of the call *site* - the file where this call is made. The sink
-    /// must be classified by where it's actually called (`beamStore.delete` in
-    /// a JS dashboard is a Map op), not by the entry point's language, since a
-    /// chain can cross languages via name matching.
-    lang: Language,
+    /// Sink classification of `name` in the call site's language, precomputed
+    /// at build time. The sink must be classified by where it's actually called
+    /// (`beamStore.delete` in a JS dashboard is a Map op), not by the entry
+    /// point's language, since a chain can cross languages via name matching.
+    sink: Option<SinkKind>,
+    /// Whether `name` looks like an auth/validation gate, precomputed likewise.
+    is_gate: bool,
 }
 
 /// Index symbols by normalized short name and by fully-qualified name.
@@ -386,9 +405,17 @@ fn build_adjacency(
             .or_else(|| ir.files.get(&call.file).map(|f| f.language.clone()))
             .or_else(|| ir.symbols.get(&call.caller).map(|s| s.language.clone()))
             .unwrap_or_default();
-        adj.entry(call.caller)
-            .or_default()
-            .push(Edge { callee, name, lang });
+        // Sink/gate classification depends only on (name, lang); doing it here
+        // once per edge keeps the BFS from re-lowercasing the same name on
+        // every visit (this pair dominated the pass's profile).
+        let sink = classify_sink(&name, &lang);
+        let is_gate = name_is_gate(&name);
+        adj.entry(call.caller).or_default().push(Edge {
+            callee,
+            name,
+            sink,
+            is_gate,
+        });
     }
     adj
 }
