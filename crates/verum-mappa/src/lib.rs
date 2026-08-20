@@ -118,6 +118,44 @@ pub(crate) fn strip_comments(source: &str, slash: bool, hash: bool, single_quote
     out
 }
 
+/// Per-thread, per-language reuse of `tree_sitter::Parser` instances.
+///
+/// Constructing a `Parser` and loading a grammar for every file is pure
+/// overhead in the rayon parse loop - each worker thread only ever needs one
+/// parser per language. A parser given no old tree is stateless between
+/// `parse` calls, so reuse cannot change the resulting tree.
+pub(crate) mod parser_pool {
+    use std::cell::RefCell;
+
+    use tree_sitter::{Language, Parser, Tree};
+
+    thread_local! {
+        // Keyed by a static language name. At most a handful of entries, so a
+        // linear scan over a Vec beats hashing.
+        static PARSERS: RefCell<Vec<(&'static str, Parser)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// Parse `source` with this thread's cached parser for `key`, creating
+    /// (and caching) one via `language` on first use per thread.
+    pub(crate) fn parse(
+        key: &'static str,
+        language: impl FnOnce() -> Language,
+        source: &str,
+    ) -> Option<Tree> {
+        PARSERS.with(|cell| {
+            let mut pool = cell.borrow_mut();
+            if let Some((_, parser)) = pool.iter_mut().find(|(k, _)| *k == key) {
+                return parser.parse(source, None);
+            }
+            let mut parser = Parser::new();
+            parser.set_language(&language()).ok()?;
+            let tree = parser.parse(source, None);
+            pool.push((key, parser));
+            tree
+        })
+    }
+}
+
 /// Configuration for the Atlas code mapper.
 #[derive(Debug, Clone)]
 pub struct AtlasConfig {
