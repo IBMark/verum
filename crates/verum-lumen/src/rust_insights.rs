@@ -267,12 +267,25 @@ pub fn analyse_with_context(ir: &Ir, ctx: &ScanContext) -> Vec<Finding> {
         // sorted order and an entry is overwritten only on a STRICTLY smaller
         // width: ties keep the earliest span, exactly reproducing the old
         // min_by_key first-wins tie-break.
-        let max_end = spans.iter().map(|s| s.end).max().unwrap_or(0) as usize;
+        //
+        // The table is only ever queried for a line that exists in the file
+        // (`enclosing` is called once per line of `lines`), so it is capped at
+        // the file's length: a span reaching past the end encloses nothing, and
+        // a nonsense `line_end` must not size the allocation.
+        let max_end = spans
+            .iter()
+            .map(|s| s.end as usize)
+            .max()
+            .unwrap_or(0)
+            .min(lines.len());
         let mut encl_idx: Vec<Option<usize>> = vec![None; max_end + 1];
         let mut encl_width: Vec<u32> = vec![u32::MAX; max_end + 1];
         for (i, s) in spans.iter().enumerate() {
-            let w = s.end - s.start;
-            for line in (s.start as usize)..=(s.end as usize) {
+            // A symbol whose `line_end` precedes its `line_start` is malformed,
+            // but it arrives from the IR rather than from this pass, so it gets
+            // clamped rather than trusted - the plain subtraction underflowed.
+            let w = s.end.saturating_sub(s.start);
+            for line in (s.start as usize)..=(s.end as usize).min(max_end) {
                 if w < encl_width[line] {
                     encl_width[line] = w;
                     encl_idx[line] = Some(i);
