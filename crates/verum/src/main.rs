@@ -1,3 +1,5 @@
+mod explain;
+mod frames;
 mod graph;
 mod map;
 mod mcp;
@@ -90,6 +92,20 @@ enum Commands {
         out: Option<PathBuf>,
     },
 
+    /// Explain a finding kind: what it detects, why it matters, how to fix it.
+    /// With no argument, list every kind; with --all, print every entry.
+    Explain {
+        /// The finding kind, by enum name (`NonConstantTimeComparison`) or
+        /// kebab alias (`non-constant-time-comparison`), case-insensitive
+        kind: Option<String>,
+        /// Print the full entry for every kind
+        #[arg(long)]
+        all: bool,
+        /// Output format: text | markdown
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
+
     /// Scaffold verum.standard.json
     Init { path: Option<PathBuf> },
 
@@ -134,6 +150,9 @@ async fn main() -> Result<()> {
         } => map::cmd_map(&path, &format, &profile, out.as_deref())
             .await
             .map(|_| true),
+        Commands::Explain { kind, all, format } => {
+            explain::cmd_explain(kind.as_deref(), all, &format).map(|_| true)
+        }
         Commands::Init { path } => cmd_init(path.as_deref()).await.map(|_| true),
         Commands::Mcp { path } => {
             mcp::cmd_mcp(path.as_deref().unwrap_or(Path::new("."))).map(|_| true)
@@ -485,6 +504,11 @@ fn is_infrastructure(k: &FindingKind) -> bool {
 }
 
 fn print_audit_results(result: &PrismResult) {
+    // Source frames for the findings printed line by line below. The budget
+    // is shared across every section and consumed in print order, so the same
+    // run always frames the same findings.
+    let mut frames = frames::Frames::new();
+
     let dead: Vec<&Finding> = result
         .findings
         .iter()
@@ -551,6 +575,7 @@ fn print_audit_results(result: &PrismResult) {
                 display_path(&f.file),
                 f.line_start
             );
+            frames.print(f);
         }
     }
 
@@ -575,6 +600,7 @@ fn print_audit_results(result: &PrismResult) {
                 display_path(&f.file),
                 f.line_start
             );
+            frames.print(f);
         }
     }
 
@@ -637,6 +663,7 @@ fn print_audit_results(result: &PrismResult) {
                 display_path(&f.file),
                 f.line_start
             );
+            frames.print(f);
         }
     }
 
@@ -705,6 +732,7 @@ fn print_audit_results(result: &PrismResult) {
                 display_path(&f.file),
                 f.line_start
             );
+            frames.print(f);
         }
         if perf.len() > 10 {
             println!("     ... {} more", perf.len() - 10);
@@ -727,6 +755,7 @@ fn print_audit_results(result: &PrismResult) {
                 display_path(&f.file),
                 f.line_start
             );
+            frames.print(f);
         }
     }
 
@@ -761,6 +790,7 @@ fn print_audit_results(result: &PrismResult) {
                 display_path(&f.file),
                 f.line_start
             );
+            frames.print(f);
         }
         if insights.len() > 14 {
             println!(
@@ -834,6 +864,10 @@ fn print_audit_results(result: &PrismResult) {
             reach.percent,
             reach.files_without_reachable_functions.len()
         );
+    }
+
+    if let Some(note) = frames.cap_note() {
+        println!("{note}");
     }
 
     println!();
@@ -2086,6 +2120,10 @@ async fn cmd_report(
                 write_measured_section(&mut md, measured)?;
             }
             writeln!(md, "\n## Findings ({})", result.findings.len())?;
+            // The markdown report is the human-readable one, so it carries
+            // source frames too. JSON and SARIF above are untouched: machines
+            // diff those, and a frame would be noise in them.
+            let mut frames = frames::Frames::new();
             for f in &result.findings {
                 writeln!(
                     md,
@@ -2096,6 +2134,12 @@ async fn cmd_report(
                     display_path(&f.file),
                     f.line_start
                 )?;
+                if let Some(frame) = frames.markdown(f) {
+                    write!(md, "{frame}")?;
+                }
+            }
+            if let Some(note) = frames.cap_note() {
+                writeln!(md, "\n{}", note.trim())?;
             }
             md
         }

@@ -66,13 +66,32 @@ verum map <path>        # module/symbol graphs, cycles, SPOFs, data flows
 verum gate <path>       # exit non-zero if the deploy-gate thresholds fail
 verum baseline <path>   # snapshot findings so gate only fails on new ones
 verum report <path>     # markdown | json | sarif | a self-contained html report
+verum explain [kind]    # what a finding kind means, why it matters, how to fix it
 verum init [path]       # write a default verum.standard.json
 ```
 
-`audit` scores the code and lists findings by severity. `clean` reports the
-fixes it would apply - symbols with no caller, duplicate bodies to remap - and
+`audit` scores the code and lists findings by severity, and prints the offending
+source line with two lines of context under each one. `clean` reports the fixes
+it would apply - symbols with no caller, duplicate bodies to remap - and
 identifies each by file and line. It runs report-only and does not modify your
 files; treat its output as a worklist to apply by hand.
+
+## Understanding a finding
+
+`verum explain <kind>` prints what a detector looks for, the concrete
+consequence of ignoring it, a flagged and a fixed example, and when suppressing
+it is a defensible call. It takes the name as reported or its kebab alias:
+
+```
+verum explain NonConstantTimeComparison
+verum explain non-constant-time-comparison
+verum explain                    # every kind, one line each
+```
+
+The same entries, for every detector Verum has, are in
+[docs/detectors.md](docs/detectors.md). That file is generated from the table
+the command reads (`verum explain --all --format markdown`), so the docs and the
+tool cannot disagree.
 
 ## Lines of code and test reachability
 
