@@ -186,13 +186,15 @@ struct FileScan {
 }
 
 /// Function spans of one file, for enclosing-symbol attribution.
-struct SpanIndex<'a> {
-    spans: Vec<(SymbolId, u32, u32, &'a str)>,
+struct SpanIndex {
+    /// line number -> symbol of the smallest span containing it, precomputed
+    /// so `enclosing` is O(1) instead of a scan over every span per query.
+    by_line: Vec<Option<SymbolId>>,
 }
 
-impl<'a> SpanIndex<'a> {
-    fn build(ir: &'a Ir, ctx: &ScanContext, file: &Path) -> Self {
-        let mut spans: Vec<(SymbolId, u32, u32, &'a str)> = ctx
+impl SpanIndex {
+    fn build(ir: &Ir, ctx: &ScanContext, file: &Path) -> Self {
+        let mut spans: Vec<(SymbolId, u32, u32)> = ctx
             .symbols(file)
             .iter()
             .filter_map(|id| ir.symbols.get_key_value(id))
@@ -202,19 +204,31 @@ impl<'a> SpanIndex<'a> {
                     SymbolKind::Function | SymbolKind::Method | SymbolKind::StaticMethod
                 )
             })
-            .map(|(id, s)| (*id, s.line_start, s.line_end, s.name.as_str()))
+            .map(|(id, s)| (*id, s.line_start, s.line_end))
             .collect();
-        spans.sort_by_key(|(_, start, end, _)| (*start, *end));
-        Self { spans }
+        spans.sort_by_key(|(_, start, end)| (*start, *end));
+
+        // Fill line -> smallest enclosing span, walking spans in sorted order
+        // and overwriting only on a STRICTLY smaller width: ties then keep the
+        // earliest span, exactly reproducing the old min_by_key first-wins.
+        let max_end = spans.iter().map(|(_, _, end)| *end).max().unwrap_or(0) as usize;
+        let mut by_line: Vec<Option<SymbolId>> = vec![None; max_end + 1];
+        let mut width: Vec<u32> = vec![u32::MAX; max_end + 1];
+        for (id, start, end) in &spans {
+            let w = end - start;
+            for line in (*start as usize)..=(*end as usize) {
+                if w < width[line] {
+                    width[line] = w;
+                    by_line[line] = Some(*id);
+                }
+            }
+        }
+        Self { by_line }
     }
 
     /// Smallest function span containing `line`.
     fn enclosing(&self, line: u32) -> Option<SymbolId> {
-        self.spans
-            .iter()
-            .filter(|(_, start, end, _)| *start <= line && line <= *end)
-            .min_by_key(|(_, start, end, _)| end - start)
-            .map(|(id, _, _, _)| *id)
+        self.by_line.get(line as usize).copied().flatten()
     }
 }
 
@@ -255,7 +269,7 @@ pub fn analyse_with_context(ir: &Ir, ctx: &ScanContext) -> (Vec<Finding>, Vec<Ta
     // Per-file scan inputs, gathered once: lines and the function-span index.
     // The fixpoint below rescans from these rather than re-reading the file or
     // rebuilding the span index on every round.
-    let mut contents: Vec<(PathBuf, ScanLang, Cow<'_, [String]>, SpanIndex<'_>)> = Vec::new();
+    let mut contents: Vec<(PathBuf, ScanLang, Cow<'_, [String]>, SpanIndex)> = Vec::new();
     for (path, language) in &files {
         let path_str = path.to_string_lossy();
         if path_str.contains("vendor/")

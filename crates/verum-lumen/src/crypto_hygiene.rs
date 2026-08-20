@@ -21,7 +21,9 @@
 use std::collections::HashSet;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
+use rayon::prelude::*;
 use regex::Regex;
 
 use verum_nucleus::{Finding, FindingKind, Ir, Language, Severity};
@@ -116,28 +118,39 @@ pub fn analyse(ir: &Ir) -> Vec<Finding> {
         .collect();
     files.sort();
 
-    for path in &files {
-        let path_str = path.to_string_lossy();
-        if path_str.contains("/target/")
-            || path_str.contains("vendor/")
-            || path_str.contains("node_modules/")
-        {
-            continue;
-        }
-        // Real test code exercises fixtures deliberately; skip it (but not
-        // fixtures-under-tests, which are analysis targets).
-        if (path_str.contains("/tests/") || path_str.ends_with("_test.rs"))
-            && !path_str.contains("fixtures")
-        {
-            continue;
-        }
+    // Each file is analysed independently; results are collected per file and
+    // flattened in the pre-sorted file order so the output sequence never
+    // depends on thread scheduling (the trailing sort then normalizes fully).
+    let per_file: Vec<Vec<Finding>> = files
+        .par_iter()
+        .map(|path| {
+            let mut file_findings = Vec::new();
+            let path_str = path.to_string_lossy();
+            if path_str.contains("/target/")
+                || path_str.contains("vendor/")
+                || path_str.contains("node_modules/")
+            {
+                return file_findings;
+            }
+            // Real test code exercises fixtures deliberately; skip it (but not
+            // fixtures-under-tests, which are analysis targets).
+            if (path_str.contains("/tests/") || path_str.ends_with("_test.rs"))
+                && !path_str.contains("fixtures")
+            {
+                return file_findings;
+            }
 
-        let Ok(raw) = std::fs::read(path) else {
-            continue;
-        };
-        let lines: Vec<String> = raw.lines().map(|l| l.unwrap_or_default()).collect();
+            let Ok(raw) = std::fs::read(path) else {
+                return file_findings;
+            };
+            let lines: Vec<String> = raw.lines().map(|l| l.unwrap_or_default()).collect();
 
-        analyse_file(path, &lines, &mut findings);
+            analyse_file(path, &lines, &mut file_findings);
+            file_findings
+        })
+        .collect();
+    for file_findings in per_file {
+        findings.extend(file_findings);
     }
 
     findings.sort_by(|a, b| (&a.file, a.line_start, &a.id).cmp(&(&b.file, b.line_start, &b.id)));
@@ -307,15 +320,22 @@ fn detect_static_nonce(path: &Path, code_lines: &[String], findings: &mut Vec<Fi
     }
 }
 
-fn nonce_literal_regex() -> Regex {
-    Regex::new(r"\[\s*(?:0x[0-9a-fA-F]+|\d+)(?:u8)?\s*;\s*(?:12|16|24)\s*\]").expect("valid regex")
+fn nonce_literal_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"\[\s*(?:0x[0-9a-fA-F]+|\d+)(?:u8)?\s*;\s*(?:12|16|24)\s*\]")
+            .expect("valid regex")
+    })
 }
 
-fn nonce_decl_regex() -> Regex {
-    Regex::new(
-        r"(?:let\s+(?:mut\s+)?|const\s+|static\s+(?:mut\s+)?)([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=]+)?=\s*\[\s*(?:0x[0-9a-fA-F]+|\d+)(?:u8)?\s*;\s*(?:12|16|24)\s*\]",
-    )
-    .expect("valid regex")
+fn nonce_decl_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?:let\s+(?:mut\s+)?|const\s+|static\s+(?:mut\s+)?)([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=]+)?=\s*\[\s*(?:0x[0-9a-fA-F]+|\d+)(?:u8)?\s*;\s*(?:12|16|24)\s*\]",
+        )
+        .expect("valid regex")
+    })
 }
 
 /// Byte positions and text of every `==`/`!=` in `line`.

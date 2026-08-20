@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use verum_nucleus::{CallTarget, Ir, SymbolId, SymbolKind};
 
@@ -62,31 +62,45 @@ fn self_method(name: &str) -> Option<&str> {
 /// resolved when exactly one candidate exists - guessing between same-named
 /// methods across classes would attribute calls to a random symbol and change
 /// between runs (HashMap iteration order is not stable).
+///
+/// Split into a read-only decision phase and an apply phase: decisions borrow
+/// call names and index keys straight out of `ir`, and strategies 1-4 (plus
+/// the receiver-free strategy 0b) depend only on `(name, call.file)`, so their
+/// outcome is memoized per distinct pair instead of recomputed per call site.
 pub fn resolve(ir: &mut Ir) {
+    let decisions = decide_all(ir);
+    for (idx, target) in decisions {
+        ir.calls[idx].callee = target;
+    }
+}
+
+/// Read-only phase: compute, in call order, every call whose target changes.
+fn decide_all(ir: &Ir) -> Vec<(usize, CallTarget)> {
     let mut ordered: Vec<(SymbolId, &verum_nucleus::Symbol)> =
         ir.symbols.iter().map(|(id, s)| (*id, s)).collect();
     ordered.sort_by(|a, b| {
         (&a.1.file, a.1.line_start, &a.1.name).cmp(&(&b.1.file, b.1.line_start, &b.1.name))
     });
 
-    let mut by_name: HashMap<String, Vec<SymbolId>> = HashMap::new();
+    let mut by_name: HashMap<&str, Vec<SymbolId>> = HashMap::new();
     // Several symbols can share one fully-qualified name - a private helper
     // repeated per module (Rust `hash_path`, Go `init`) is the common case.
     // Keeping only the first would bind every caller to one arbitrary
     // definition and leave the rest looking uncalled, so track them all.
-    let mut by_fq: HashMap<String, Vec<SymbolId>> = HashMap::new();
+    let mut by_fq: HashMap<&str, Vec<SymbolId>> = HashMap::new();
     // Suffix index: last segment of FQ name -> Vec of (FQ name, SymbolId)
-    let mut by_suffix: HashMap<String, Vec<(String, SymbolId)>> = HashMap::new();
+    let mut by_suffix: HashMap<&str, Vec<(&str, SymbolId)>> = HashMap::new();
 
-    // Receiver-aware indexes: methods keyed by (parent class, method name),
+    // Receiver-aware indexes: methods keyed by parent class then method name
+    // (nested so lookups work with a borrowed `&str`, no per-lookup String),
     // and classes by short name (for `new Class` / `Class::method`).
-    let mut method_by_parent: HashMap<(SymbolId, String), SymbolId> = HashMap::new();
-    let mut class_by_name: HashMap<String, Vec<SymbolId>> = HashMap::new();
+    let mut method_by_parent: HashMap<SymbolId, HashMap<&str, SymbolId>> = HashMap::new();
+    let mut class_by_name: HashMap<&str, Vec<SymbolId>> = HashMap::new();
 
     for (id, sym) in &ordered {
-        by_name.entry(sym.name.clone()).or_default().push(*id);
+        by_name.entry(sym.name.as_str()).or_default().push(*id);
         by_fq
-            .entry(sym.fully_qualified.clone())
+            .entry(sym.fully_qualified.as_str())
             .or_default()
             .push(*id);
 
@@ -94,37 +108,36 @@ pub fn resolve(ir: &mut Ir) {
             SymbolKind::Method | SymbolKind::StaticMethod => {
                 if let Some(parent) = sym.parent {
                     method_by_parent
-                        .entry((parent, sym.name.clone()))
+                        .entry(parent)
+                        .or_default()
+                        .entry(sym.name.as_str())
                         .or_insert(*id);
                 }
             }
             SymbolKind::Class | SymbolKind::Trait | SymbolKind::Interface => {
-                class_by_name.entry(sym.name.clone()).or_default().push(*id);
+                class_by_name
+                    .entry(sym.name.as_str())
+                    .or_default()
+                    .push(*id);
             }
             _ => {}
         }
 
-        let fq = &sym.fully_qualified;
+        let fq = sym.fully_qualified.as_str();
         if let Some(suffix) = fq.rsplit('\\').next() {
-            by_suffix
-                .entry(suffix.to_string())
-                .or_default()
-                .push((fq.clone(), *id));
+            by_suffix.entry(suffix).or_default().push((fq, *id));
         }
         if let Some(suffix) = fq.rsplit("::").next() {
             if suffix != fq {
-                by_suffix
-                    .entry(suffix.to_string())
-                    .or_default()
-                    .push((fq.clone(), *id));
+                by_suffix.entry(suffix).or_default().push((fq, *id));
             }
         }
     }
 
     // File of each symbol, for disambiguating same-named definitions.
-    let sym_file: HashMap<SymbolId, PathBuf> = ordered
+    let sym_file: HashMap<SymbolId, &Path> = ordered
         .iter()
-        .map(|(id, s)| (*id, s.file.clone()))
+        .map(|(id, s)| (*id, s.file.as_path()))
         .collect();
 
     // Resolve a set of same-named candidates against the call site. A lone
@@ -140,7 +153,7 @@ pub fn resolve(ir: &mut Ir) {
             _ => {
                 let mut local = ids
                     .iter()
-                    .filter(|id| sym_file.get(*id).map(|f| f == call_file).unwrap_or(false));
+                    .filter(|id| sym_file.get(*id).map(|f| *f == call_file).unwrap_or(false));
                 let first = local.next()?;
                 match local.next() {
                     Some(_) => None,
@@ -150,94 +163,110 @@ pub fn resolve(ir: &mut Ir) {
         }
     };
 
-    // Precompute each caller's enclosing class so the mutable call loop below
-    // doesn't need to borrow `ir.symbols` again.
+    // Strategies 0b and 1-4, all functions of (name, call file) only.
+    let decide_by_name_and_file = |name: &str, call_file: &Path| -> Option<SymbolId> {
+        // Strategy 0b: `Class::method` / `Class->method` where Class is
+        // a known, unambiguous class -> its method of that name.
+        if let Some((cls, method)) = split_qualified(name) {
+            if let Some(classes) = class_by_name.get(cls) {
+                if classes.len() == 1 {
+                    if let Some(id) = method_by_parent
+                        .get(&classes[0])
+                        .and_then(|methods| methods.get(method))
+                    {
+                        return Some(*id);
+                    }
+                }
+            }
+        }
+
+        // Strategy 1: Exact FQ match
+        if let Some(id) = disambiguate(by_fq.get(name), call_file) {
+            return Some(id);
+        }
+
+        // Strategy 2: Unambiguous short name match
+        if let Some(id) = disambiguate(by_name.get(name), call_file) {
+            return Some(id);
+        }
+
+        // Strategy 3: Final segment (strip each qualifier in turn)
+        let last_segment = {
+            let n = name.rsplit('\\').next().unwrap_or(name);
+            let n = n.rsplit("::").next().unwrap_or(n);
+            let n = n.rsplit("->").next().unwrap_or(n);
+            n.rsplit('.').next().unwrap_or(n)
+        };
+
+        if last_segment != name {
+            if let Some(id) = disambiguate(by_fq.get(last_segment), call_file) {
+                return Some(id);
+            }
+            if let Some(id) = disambiguate(by_name.get(last_segment), call_file) {
+                return Some(id);
+            }
+        }
+
+        // Strategy 4: Suffix index for partial namespace matches
+        if let Some(candidates) = by_suffix.get(last_segment) {
+            if candidates.len() == 1 {
+                return Some(candidates[0].1);
+            }
+            // Multiple candidates: only a full suffix match on the
+            // original (qualified) name is trustworthy.
+            if name != last_segment {
+                if let Some((_, id)) = candidates.iter().find(|(fq, _)| fq.ends_with(name)) {
+                    return Some(*id);
+                }
+            }
+        }
+
+        // Otherwise leave as Unresolved - dead_code uses called_names
+        // to still mark these as "alive" by name match
+        None
+    };
+
+    // Precompute each caller's enclosing class for strategy 0a.
     let caller_class: HashMap<SymbolId, SymbolId> = ordered
         .iter()
         .filter_map(|(id, _)| enclosing_class(ir, *id).map(|c| (*id, c)))
         .collect();
 
-    for call in &mut ir.calls {
+    let mut decisions: Vec<(usize, CallTarget)> = Vec::new();
+    let mut memo: HashMap<(&str, &Path), Option<SymbolId>> = HashMap::new();
+
+    for (idx, call) in ir.calls.iter().enumerate() {
         if let CallTarget::Unresolved(name) = &call.callee {
             if name.contains("$$") || name == "call_user_func" || name == "call_user_func_array" {
-                call.callee = CallTarget::Dynamic(name.clone());
+                decisions.push((idx, CallTarget::Dynamic(name.clone())));
                 continue;
             }
 
             // Strategy 0a: receiver-aware intra-class call
             // (`$this->m()`, `self::m()`, `static::m()`, `parent::m()`).
             // Bind to a method named `m` on the caller's own class - the
-            // single biggest source of resolvable OO calls.
+            // single biggest source of resolvable OO calls. Depends on the
+            // caller, so it stays per call site, ahead of the memoized rest.
             if let Some(method) = self_method(name) {
                 if let Some(class) = caller_class.get(&call.caller) {
-                    if let Some(id) = method_by_parent.get(&(*class, method.to_string())) {
-                        call.callee = CallTarget::Resolved(*id);
+                    if let Some(id) = method_by_parent
+                        .get(class)
+                        .and_then(|methods| methods.get(method))
+                    {
+                        decisions.push((idx, CallTarget::Resolved(*id)));
                         continue;
                     }
                 }
             }
 
-            // Strategy 0b: `Class::method` / `Class->method` where Class is
-            // a known, unambiguous class -> its method of that name.
-            if let Some((cls, method)) = split_qualified(name) {
-                if let Some(classes) = class_by_name.get(cls) {
-                    if classes.len() == 1 {
-                        if let Some(id) = method_by_parent.get(&(classes[0], method.to_string())) {
-                            call.callee = CallTarget::Resolved(*id);
-                            continue;
-                        }
-                    }
-                }
+            let resolved = *memo
+                .entry((name.as_str(), call.file.as_path()))
+                .or_insert_with(|| decide_by_name_and_file(name, &call.file));
+            if let Some(id) = resolved {
+                decisions.push((idx, CallTarget::Resolved(id)));
             }
-
-            // Strategy 1: Exact FQ match
-            if let Some(id) = disambiguate(by_fq.get(name), &call.file) {
-                call.callee = CallTarget::Resolved(id);
-                continue;
-            }
-
-            // Strategy 2: Unambiguous short name match
-            if let Some(id) = disambiguate(by_name.get(name), &call.file) {
-                call.callee = CallTarget::Resolved(id);
-                continue;
-            }
-
-            // Strategy 3: Final segment (strip each qualifier in turn)
-            let last_segment = {
-                let n = name.rsplit('\\').next().unwrap_or(name);
-                let n = n.rsplit("::").next().unwrap_or(n);
-                let n = n.rsplit("->").next().unwrap_or(n);
-                n.rsplit('.').next().unwrap_or(n)
-            };
-
-            if last_segment != name {
-                if let Some(id) = disambiguate(by_fq.get(last_segment), &call.file) {
-                    call.callee = CallTarget::Resolved(id);
-                    continue;
-                }
-                if let Some(id) = disambiguate(by_name.get(last_segment), &call.file) {
-                    call.callee = CallTarget::Resolved(id);
-                    continue;
-                }
-            }
-
-            // Strategy 4: Suffix index for partial namespace matches
-            if let Some(candidates) = by_suffix.get(last_segment) {
-                if candidates.len() == 1 {
-                    call.callee = CallTarget::Resolved(candidates[0].1);
-                    continue;
-                }
-                // Multiple candidates: only a full suffix match on the
-                // original (qualified) name is trustworthy.
-                if name != last_segment {
-                    if let Some((_, id)) = candidates.iter().find(|(fq, _)| fq.ends_with(name)) {
-                        call.callee = CallTarget::Resolved(*id);
-                    }
-                }
-            }
-
-            // Otherwise leave as Unresolved - dead_code uses called_names
-            // to still mark these as "alive" by name match
         }
     }
+
+    decisions
 }

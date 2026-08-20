@@ -16,6 +16,9 @@
 //! spans, tuned to be quiet on healthy code.
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+use rayon::prelude::*;
 
 use crate::scan::ScanContext;
 use verum_nucleus::Severity;
@@ -148,46 +151,57 @@ pub fn analyse_with_context(ir: &Ir, ctx: &ScanContext) -> Vec<Finding> {
     let mut files: Vec<PathBuf> = ir.files.keys().cloned().collect();
     files.sort();
 
-    for path in &files {
-        let path_str = path.to_string_lossy();
-        if path_str.contains("/target/")
-            || path_str.contains("node_modules/")
-            || path_str.contains("vendor/")
-        {
-            continue;
-        }
-        // Real test code exercises protocols deliberately; skip it (but not
-        // fixtures-under-tests, which are analysis targets).
-        if (path_str.contains("/tests/") || path_str.ends_with("_test.rs"))
-            && !path_str.contains("fixtures")
-        {
-            continue;
-        }
+    // Each file is analysed independently; results are collected per file and
+    // flattened in the pre-sorted file order so the output sequence never
+    // depends on thread scheduling (the trailing sort then normalizes fully).
+    let per_file: Vec<Vec<Finding>> = files
+        .par_iter()
+        .map(|path| {
+            let mut file_findings = Vec::new();
+            let path_str = path.to_string_lossy();
+            if path_str.contains("/target/")
+                || path_str.contains("node_modules/")
+                || path_str.contains("vendor/")
+            {
+                return file_findings;
+            }
+            // Real test code exercises protocols deliberately; skip it (but not
+            // fixtures-under-tests, which are analysis targets).
+            if (path_str.contains("/tests/") || path_str.ends_with("_test.rs"))
+                && !path_str.contains("fixtures")
+            {
+                return file_findings;
+            }
 
-        let Some(lines) = ctx.lines(path) else {
-            continue;
-        };
+            let Some(lines) = ctx.lines(path) else {
+                return file_findings;
+            };
 
-        let mut spans: Vec<FnSpan> = ctx
-            .symbols(path)
-            .iter()
-            .filter_map(|id| ir.symbols.get(id))
-            .filter(|s| {
-                matches!(
-                    s.kind,
-                    SymbolKind::Function | SymbolKind::Method | SymbolKind::StaticMethod
-                )
-            })
-            .map(|s| FnSpan {
-                id: s.id,
-                name: s.name.clone(),
-                start: s.line_start,
-                end: s.line_end,
-            })
-            .collect();
-        spans.sort_by_key(|s| (s.start, s.end));
+            let mut spans: Vec<FnSpan> = ctx
+                .symbols(path)
+                .iter()
+                .filter_map(|id| ir.symbols.get(id))
+                .filter(|s| {
+                    matches!(
+                        s.kind,
+                        SymbolKind::Function | SymbolKind::Method | SymbolKind::StaticMethod
+                    )
+                })
+                .map(|s| FnSpan {
+                    id: s.id,
+                    name: s.name.clone(),
+                    start: s.line_start,
+                    end: s.line_end,
+                })
+                .collect();
+            spans.sort_by_key(|s| (s.start, s.end));
 
-        analyse_file(path, &lines, &spans, &mut findings);
+            analyse_file(path, &lines, &spans, &mut file_findings);
+            file_findings
+        })
+        .collect();
+    for file_findings in per_file {
+        findings.extend(file_findings);
     }
 
     findings.sort_by(|a, b| (&a.file, a.line_start).cmp(&(&b.file, b.line_start)));
@@ -278,8 +292,11 @@ fn detect_split_messages(
 /// Detector 2: a compile-time chunk size above the MTU used in a datagram
 /// file - datagrams will rely on IP fragmentation.
 fn detect_oversized_datagrams(path: &Path, code_lines: &[String], findings: &mut Vec<Finding>) {
-    let const_re = regex::Regex::new(r"const\s+([A-Z_][A-Z0-9_]*)\s*(?::\s*\w+)?\s*=\s*(\d[\d_]*)")
-        .expect("valid regex");
+    static CONST_RE: OnceLock<regex::Regex> = OnceLock::new();
+    let const_re = CONST_RE.get_or_init(|| {
+        regex::Regex::new(r"const\s+([A-Z_][A-Z0-9_]*)\s*(?::\s*\w+)?\s*=\s*(\d[\d_]*)")
+            .expect("valid regex")
+    });
     let mut consts: Vec<(String, usize)> = Vec::new();
     for line in code_lines {
         if let Some(cap) = const_re.captures(line) {
@@ -289,7 +306,10 @@ fn detect_oversized_datagrams(path: &Path, code_lines: &[String], findings: &mut
         }
     }
 
-    let chunks_re = regex::Regex::new(r"\.chunks\(\s*([A-Za-z0-9_]+)\s*\)").expect("valid regex");
+    static CHUNKS_RE: OnceLock<regex::Regex> = OnceLock::new();
+    let chunks_re = CHUNKS_RE.get_or_init(|| {
+        regex::Regex::new(r"\.chunks\(\s*([A-Za-z0-9_]+)\s*\)").expect("valid regex")
+    });
     for (idx, line) in code_lines.iter().enumerate() {
         let Some(cap) = chunks_re.captures(line) else {
             continue;
@@ -327,10 +347,13 @@ fn detect_oversized_datagrams(path: &Path, code_lines: &[String], findings: &mut
 /// read-length sink with no visible bound check anywhere in the file.
 fn detect_unvalidated_length(path: &Path, code_lines: &[String], findings: &mut Vec<Finding>) {
     // `let frame_len = u32::from_be_bytes(...)`, `frameLen: view.getUint32(12)`, ...
-    let assign_re = regex::Regex::new(
-        r"(?:let\s+(?:mut\s+)?|const\s+|var\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*[:=][^=]",
-    )
-    .expect("valid regex");
+    static ASSIGN_RE: OnceLock<regex::Regex> = OnceLock::new();
+    let assign_re = ASSIGN_RE.get_or_init(|| {
+        regex::Regex::new(
+            r"(?:let\s+(?:mut\s+)?|const\s+|var\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*[:=][^=]",
+        )
+        .expect("valid regex")
+    });
 
     let mut wire_vars: Vec<(String, u32)> = Vec::new();
     for (idx, line) in code_lines.iter().enumerate() {

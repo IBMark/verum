@@ -69,10 +69,27 @@ pub fn analyse(ir: &Ir) -> (Vec<Finding>, Vec<DuplicateGroup>) {
             }
         }
     }
+    // Canonical selection ranks members by raw call-site count, INCLUDING
+    // repeated (file, line) pairs - snapshot the multiset sizes before the
+    // buckets are deduplicated below, or canonical members would shift.
+    let count_by_id: HashMap<SymbolId, usize> =
+        sites_by_id.iter().map(|(id, v)| (*id, v.len())).collect();
+    let count_by_name: HashMap<String, usize> = sites_by_name
+        .iter()
+        .map(|(n, v)| (n.clone(), v.len()))
+        .collect();
     let caller_count = |id: SymbolId, sym: &Symbol| -> usize {
-        sites_by_id.get(&id).map_or(0, |v| v.len())
-            + sites_by_name.get(sym.name.as_str()).map_or(0, |v| v.len())
+        count_by_id.get(&id).copied().unwrap_or(0)
+            + count_by_name.get(sym.name.as_str()).copied().unwrap_or(0)
     };
+
+    // Sort + dedup each shared bucket once, so call_sites_of can linearly
+    // merge two already-sorted lists instead of re-sorting the same bucket
+    // for every duplicate member (this dominated the pass's profile).
+    for sites in sites_by_id.values_mut().chain(sites_by_name.values_mut()) {
+        sites.sort_by(|a, b| (&a.0, a.1).cmp(&(&b.0, b.1)));
+        sites.dedup();
+    }
 
     let mut grouped: HashSet<SymbolId> = HashSet::new();
 
@@ -172,25 +189,51 @@ fn final_segment(name: &str) -> &str {
 
 /// Call sites of a symbol (by resolved id or matching final name segment) -
 /// the locations a remap would have to rewrite.
+///
+/// Both input buckets are pre-sorted and deduplicated by `analyse`, so this is
+/// a linear merge (dropping cross-list (file, line) duplicates, exactly as the
+/// old sort + dedup over the concatenation did).
 fn call_sites_of(
     id: SymbolId,
     sym: &Symbol,
     sites_by_id: &HashMap<SymbolId, Vec<(std::path::PathBuf, u32)>>,
     sites_by_name: &HashMap<String, Vec<(std::path::PathBuf, u32)>>,
 ) -> Vec<Location> {
-    let mut sites: Vec<Location> = sites_by_id
-        .get(&id)
-        .into_iter()
-        .flatten()
-        .chain(sites_by_name.get(sym.name.as_str()).into_iter().flatten())
-        .map(|(file, line)| Location {
-            file: file.clone(),
-            line: *line,
-            description: format!("call to `{}`", sym.name),
-        })
-        .collect();
-    sites.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
-    sites.dedup_by(|a, b| a.file == b.file && a.line == b.line);
+    let by_id: &[(std::path::PathBuf, u32)] =
+        sites_by_id.get(&id).map(|v| v.as_slice()).unwrap_or(&[]);
+    let by_name: &[(std::path::PathBuf, u32)] = sites_by_name
+        .get(sym.name.as_str())
+        .map(|v| v.as_slice())
+        .unwrap_or(&[]);
+
+    let description = format!("call to `{}`", sym.name);
+    let loc = |(file, line): &(std::path::PathBuf, u32)| Location {
+        file: file.clone(),
+        line: *line,
+        description: description.clone(),
+    };
+
+    let mut sites: Vec<Location> = Vec::with_capacity(by_id.len() + by_name.len());
+    let (mut i, mut j) = (0, 0);
+    while i < by_id.len() && j < by_name.len() {
+        match (&by_id[i].0, by_id[i].1).cmp(&(&by_name[j].0, by_name[j].1)) {
+            std::cmp::Ordering::Less => {
+                sites.push(loc(&by_id[i]));
+                i += 1;
+            }
+            std::cmp::Ordering::Greater => {
+                sites.push(loc(&by_name[j]));
+                j += 1;
+            }
+            std::cmp::Ordering::Equal => {
+                sites.push(loc(&by_id[i]));
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    sites.extend(by_id[i..].iter().map(&loc));
+    sites.extend(by_name[j..].iter().map(&loc));
     sites
 }
 

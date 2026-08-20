@@ -290,17 +290,33 @@ pub fn analyse(ir: &Ir, config: &NamingConfig) -> Vec<Finding> {
         .collect();
     method_syms.sort_by(|a, b| (&a.file, a.line_start).cmp(&(&b.file, b.line_start)));
 
-    for group in synonym_groups {
-        // First example symbol per used prefix, in deterministic order.
-        let mut used: Vec<(&str, &verum_nucleus::Symbol)> = Vec::new();
-        for prefix in *group {
-            for sym in &method_syms {
-                if is_prefix_variant(&sym.name, prefix) {
-                    used.push((prefix, sym));
-                    break;
+    // First example symbol per (group, prefix), found in ONE pass over the
+    // sorted symbols instead of a full rescan per prefix; the symbol order is
+    // the same, so each prefix keeps the exact first match it always had.
+    let mut first_by_prefix: Vec<Vec<Option<&verum_nucleus::Symbol>>> =
+        synonym_groups.iter().map(|g| vec![None; g.len()]).collect();
+    let mut missing: usize = synonym_groups.iter().map(|g| g.len()).sum();
+    'scan: for sym in &method_syms {
+        for (gi, group) in synonym_groups.iter().enumerate() {
+            for (pi, prefix) in group.iter().enumerate() {
+                if first_by_prefix[gi][pi].is_none() && is_prefix_variant(&sym.name, prefix) {
+                    first_by_prefix[gi][pi] = Some(sym);
+                    missing -= 1;
+                    if missing == 0 {
+                        break 'scan;
+                    }
                 }
             }
         }
+    }
+
+    for (gi, group) in synonym_groups.iter().enumerate() {
+        // First example symbol per used prefix, in deterministic order.
+        let used: Vec<(&str, &verum_nucleus::Symbol)> = group
+            .iter()
+            .enumerate()
+            .filter_map(|(pi, prefix)| first_by_prefix[gi][pi].map(|s| (*prefix, s)))
+            .collect();
         if used.len() > 1 {
             let variants: Vec<&str> = used.iter().map(|(p, _)| *p).collect();
             let first_sym = used[0].1;
