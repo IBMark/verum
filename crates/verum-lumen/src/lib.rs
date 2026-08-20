@@ -286,9 +286,7 @@ impl Prism {
             s.spawn(|_| duplicates_r = prof!("duplicates", duplicates::analyse(ir)));
             s.spawn(|_| security_f = prof!("security", security::analyse(ir, &standard.security)));
             s.spawn(|_| crypto_hygiene_f = prof!("crypto_hygiene", crypto_hygiene::analyse(ir)));
-            s.spawn(|_| {
-                taint_f = prof!("taint", taint::analyse_with_context(ir, scan_ctx_ref).0)
-            });
+            s.spawn(|_| taint_f = prof!("taint", taint::analyse_with_context(ir, scan_ctx_ref).0));
             s.spawn(|_| naming_f = prof!("naming", naming::analyse(ir, &standard.naming)));
             s.spawn(|_| complexity_f = prof!("complexity", complexity::analyse(ir, standard)));
             s.spawn(|_| performance_f = prof!("performance", performance::analyse(ir)));

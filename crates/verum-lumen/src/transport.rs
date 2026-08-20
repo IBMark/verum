@@ -307,8 +307,9 @@ fn detect_oversized_datagrams(path: &Path, code_lines: &[String], findings: &mut
     }
 
     static CHUNKS_RE: OnceLock<regex::Regex> = OnceLock::new();
-    let chunks_re = CHUNKS_RE
-        .get_or_init(|| regex::Regex::new(r"\.chunks\(\s*([A-Za-z0-9_]+)\s*\)").expect("valid regex"));
+    let chunks_re = CHUNKS_RE.get_or_init(|| {
+        regex::Regex::new(r"\.chunks\(\s*([A-Za-z0-9_]+)\s*\)").expect("valid regex")
+    });
     for (idx, line) in code_lines.iter().enumerate() {
         let Some(cap) = chunks_re.captures(line) else {
             continue;
@@ -348,8 +349,10 @@ fn detect_unvalidated_length(path: &Path, code_lines: &[String], findings: &mut 
     // `let frame_len = u32::from_be_bytes(...)`, `frameLen: view.getUint32(12)`, ...
     static ASSIGN_RE: OnceLock<regex::Regex> = OnceLock::new();
     let assign_re = ASSIGN_RE.get_or_init(|| {
-        regex::Regex::new(r"(?:let\s+(?:mut\s+)?|const\s+|var\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*[:=][^=]")
-            .expect("valid regex")
+        regex::Regex::new(
+            r"(?:let\s+(?:mut\s+)?|const\s+|var\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*[:=][^=]",
+        )
+        .expect("valid regex")
     });
 
     let mut wire_vars: Vec<(String, u32)> = Vec::new();

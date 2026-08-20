@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use regex::Regex;
 
@@ -351,6 +351,11 @@ pub fn analyse(ir: &Ir, config: &DeadCodeConfig) -> Vec<Finding> {
 
     let mut findings = Vec::new();
 
+    // Whether a file sits under a Rust lib-crate root, memoized per file:
+    // symbols cluster by file, so this replaces a roots-scan per symbol with
+    // one per distinct file.
+    let mut under_lib_root: HashMap<&Path, bool> = HashMap::new();
+
     for (id, sym) in &ir.symbols {
         match &sym.kind {
             SymbolKind::Function | SymbolKind::Method | SymbolKind::StaticMethod => {}
@@ -447,7 +452,9 @@ pub fn analyse(ir: &Ir, config: &DeadCodeConfig) -> Vec<Finding> {
             // absent in-crate call proves nothing (rustc's dead_code lint stays
             // quiet for exported items too).
             if matches!(sym.visibility, Visibility::Public)
-                && rust_lib_roots.iter().any(|root| sym.file.starts_with(root))
+                && *under_lib_root
+                    .entry(sym.file.as_path())
+                    .or_insert_with(|| rust_lib_roots.iter().any(|root| sym.file.starts_with(root)))
             {
                 continue;
             }
