@@ -512,6 +512,24 @@ impl Atlas {
 /// generated bundles, test corpora and data files do.
 const MAX_SOURCE_FILE_BYTES: u64 = 5 * 1024 * 1024;
 
+/// Maximum depth any recursive extractor walk descends into an AST (or a
+/// nested `use` group).
+///
+/// A hostile file - 10k nested parens, or a megabyte-long `1+1+...` chain -
+/// parses into a tree whose depth tracks the input, and recursive descent
+/// over it overflows the thread's stack. Unlike a panic, a stack overflow
+/// ABORTS the process: `catch_unwind` never runs, so the per-file panic
+/// guard cannot contain it. The walkers therefore stop descending at this
+/// fixed depth and skip anything deeper.
+///
+/// Deterministic by construction: the cutoff depends only on the input's
+/// tree shape, never on wall-clock time or stack headroom, so identical
+/// inputs truncate identically on every machine. Hand-written code nests a
+/// few dozen levels at most; 512 leaves an order of magnitude of margin
+/// while bounding worst-case stack use well inside the smallest (2 MiB)
+/// worker stacks.
+pub(crate) const MAX_RECURSION_DEPTH: usize = 512;
+
 /// The partial IR recording that `path`'s parse panicked and was isolated.
 /// No symbols are extracted (the parser cannot be trusted on this input), but
 /// the diagnostic rides the normal IR merge so the finding surfaces in every

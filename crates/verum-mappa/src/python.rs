@@ -17,6 +17,7 @@ pub fn parse_file(path: &Path) -> Result<Ir> {
         .ok_or_else(|| anyhow::anyhow!("Failed to parse {}", path.display()))?;
 
     let mut extractor = PythonExtractor {
+        depth: 0,
         source: source.clone(),
         path: path.to_path_buf(),
         next_id: hash_path(path),
@@ -57,6 +58,10 @@ pub fn parse_file(path: &Path) -> Result<Ir> {
 }
 
 struct PythonExtractor {
+    /// Current `walk_node` recursion depth, checked against
+    /// [`crate::MAX_RECURSION_DEPTH`] so a pathologically deep AST cannot
+    /// overflow the stack (an abort no panic guard can catch).
+    depth: usize,
     source: String,
     path: std::path::PathBuf,
     next_id: u64,
@@ -164,7 +169,23 @@ impl PythonExtractor {
         None
     }
 
+    /// Depth-capped dispatch. A hostile file (10k nested parens, a
+    /// megabyte-long `1+1+...` chain) parses into an AST deep enough that
+    /// recursive descent overflows the stack, and a stack overflow ABORTS
+    /// the process - no unwind, so the per-file panic guard cannot help.
+    /// Nodes deeper than the fixed cap are skipped; the cutoff depends
+    /// only on the input's AST shape (deterministic), and real code never
+    /// comes within an order of magnitude of the cap.
     fn walk_node(&mut self, node: tree_sitter::Node) {
+        if self.depth >= crate::MAX_RECURSION_DEPTH {
+            return;
+        }
+        self.depth += 1;
+        self.walk_node_inner(node);
+        self.depth -= 1;
+    }
+
+    fn walk_node_inner(&mut self, node: tree_sitter::Node) {
         match node.kind() {
             "class_definition" => self.handle_class(node),
             "function_definition" => self.handle_function(node),

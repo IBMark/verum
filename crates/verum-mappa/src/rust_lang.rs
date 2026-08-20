@@ -16,6 +16,7 @@ pub fn parse_file(path: &Path) -> Result<Ir> {
         .ok_or_else(|| anyhow::anyhow!("Failed to parse {}", path.display()))?;
 
     let mut extractor = RustExtractor {
+        depth: 0,
         source: source.clone(),
         path: path.to_path_buf(),
         next_id: hash_path(path),
@@ -33,7 +34,7 @@ pub fn parse_file(path: &Path) -> Result<Ir> {
         ir: Ir::new(),
     };
 
-    extractor.collect_fn_returns(tree.root_node());
+    extractor.collect_fn_returns(tree.root_node(), 0);
     extractor.walk_node(tree.root_node());
     extractor.record_attribute_refs();
 
@@ -82,6 +83,10 @@ pub fn parse_file(path: &Path) -> Result<Ir> {
 }
 
 struct RustExtractor {
+    /// Current `walk_node` recursion depth, checked against
+    /// [`crate::MAX_RECURSION_DEPTH`] so a pathologically deep AST cannot
+    /// overflow the stack (an abort no panic guard can catch).
+    depth: usize,
     source: String,
     path: std::path::PathBuf,
     next_id: u64,
@@ -239,7 +244,23 @@ impl RustExtractor {
         attrs.contains("cfg(") && PLATFORM_CFG_TOKENS.iter().any(|t| attrs.contains(t))
     }
 
+    /// Depth-capped dispatch. A hostile file (10k nested parens, a
+    /// megabyte-long `1+1+...` chain) parses into an AST deep enough that
+    /// recursive descent overflows the stack, and a stack overflow ABORTS
+    /// the process - no unwind, so the per-file panic guard cannot help.
+    /// Nodes deeper than the fixed cap are skipped; the cutoff depends
+    /// only on the input's AST shape (deterministic), and real code never
+    /// comes within an order of magnitude of the cap.
     fn walk_node(&mut self, node: tree_sitter::Node) {
+        if self.depth >= crate::MAX_RECURSION_DEPTH {
+            return;
+        }
+        self.depth += 1;
+        self.walk_node_inner(node);
+        self.depth -= 1;
+    }
+
+    fn walk_node_inner(&mut self, node: tree_sitter::Node) {
         match node.kind() {
             "mod_item" => self.handle_mod(node),
             "use_declaration" => self.handle_use(node),
@@ -313,7 +334,7 @@ impl RustExtractor {
             .trim()
             .to_string();
         let mut pairs = Vec::new();
-        expand_use(&spec, "", &mut pairs);
+        expand_use(&spec, "", &mut pairs, 0);
         for (alias, full) in pairs {
             let full = full.strip_prefix("crate::").unwrap_or(&full).to_string();
             self.use_aliases.insert(alias, full);
@@ -760,7 +781,14 @@ impl RustExtractor {
     /// `let x = f()` can type `x` even when `f` is defined later in the file.
     /// First definition wins on name collision (deterministic, position-sorted
     /// enough for this heuristic).
-    fn collect_fn_returns(&mut self, node: tree_sitter::Node) {
+    /// Depth-capped like `walk_node`: this pre-pass recurses over the whole
+    /// tree on its own, so a pathologically deep AST would overflow the stack
+    /// here before the main walk ever runs. Anything past the cap is skipped
+    /// deterministically.
+    fn collect_fn_returns(&mut self, node: tree_sitter::Node, depth: usize) {
+        if depth >= crate::MAX_RECURSION_DEPTH {
+            return;
+        }
         if node.kind() == "function_item" {
             if let (Some(name), Some(ret)) = (
                 node.child_by_field_name("name"),
@@ -776,7 +804,7 @@ impl RustExtractor {
         let n = node.child_count();
         for i in 0..n {
             if let Some(c) = node.child(i as u32) {
-                self.collect_fn_returns(c);
+                self.collect_fn_returns(c, depth + 1);
             }
         }
     }
@@ -1312,7 +1340,7 @@ impl RustExtractor {
             if let Some(child) = node.child(i as u32) {
                 match child.kind() {
                     // Arguments are an unparsed token stream, not expressions.
-                    "token_tree" => self.scan_token_tree(child),
+                    "token_tree" => self.scan_token_tree(child, 0),
                     // The macro's own name, already recorded above.
                     "identifier" | "scoped_identifier" => {}
                     _ => self.walk_node(child),
@@ -1331,7 +1359,13 @@ impl RustExtractor {
     ///
     /// Recognises `foo(..)`, `a::b::foo(..)`, `x.foo(..)` and nested `bar!(..)`
     /// by matching an identifier immediately followed by a `(`-delimited group.
-    fn scan_token_tree(&mut self, node: tree_sitter::Node) {
+    /// Depth-capped: token trees nest one level per delimiter group, so a
+    /// hostile `m!(((((...` would otherwise recurse to the input's depth and
+    /// overflow the stack. Groups past the cap are skipped deterministically.
+    fn scan_token_tree(&mut self, node: tree_sitter::Node, depth: usize) {
+        if depth >= crate::MAX_RECURSION_DEPTH {
+            return;
+        }
         let caller_id = self
             .current_function
             .or(self.current_impl)
@@ -1344,7 +1378,7 @@ impl RustExtractor {
         for (i, child) in children.iter().enumerate() {
             // Nested delimiter groups: `outer(inner(x))`, `vec![f()]`.
             if child.kind() == "token_tree" {
-                self.scan_token_tree(*child);
+                self.scan_token_tree(*child, depth + 1);
                 continue;
             }
 
@@ -1658,7 +1692,15 @@ fn module_path_for(path: &Path) -> String {
 
 /// Expand one `use` spec into (alias, full path) pairs. Handles `a::b::c`,
 /// `a::b as x`, nested groups `a::{b, c as d, e::{f, self}}`; skips globs.
-fn expand_use(spec: &str, prefix: &str, out: &mut Vec<(String, String)>) {
+///
+/// `rec` counts group-nesting recursion. A hostile `use a::{a::{a::{...`
+/// nests one call frame per brace; past [`crate::MAX_RECURSION_DEPTH`] the
+/// remainder is dropped (deterministically - real imports nest a handful of
+/// levels) instead of overflowing the stack.
+fn expand_use(spec: &str, prefix: &str, out: &mut Vec<(String, String)>, rec: usize) {
+    if rec >= crate::MAX_RECURSION_DEPTH {
+        return;
+    }
     let spec = spec.trim();
     if let Some(brace) = spec.find('{') {
         let head = spec[..brace].trim().trim_end_matches("::");
@@ -1677,13 +1719,13 @@ fn expand_use(spec: &str, prefix: &str, out: &mut Vec<(String, String)>) {
                 '{' => depth += 1,
                 '}' => depth -= 1,
                 ',' if depth == 0 => {
-                    expand_use(&inner[start..i], &new_prefix, out);
+                    expand_use(&inner[start..i], &new_prefix, out, rec + 1);
                     start = i + 1;
                 }
                 _ => {}
             }
         }
-        expand_use(&inner[start..], &new_prefix, out);
+        expand_use(&inner[start..], &new_prefix, out, rec + 1);
         return;
     }
     if spec.is_empty() || spec == "*" || spec.ends_with("::*") {
@@ -1732,7 +1774,14 @@ fn structural_hash(body: tree_sitter::Node) -> (u64, usize) {
         *acc ^= 0x1f;
         *acc = acc.wrapping_mul(0x100000001b3);
     }
-    fn walk(node: tree_sitter::Node, acc: &mut u64, count: &mut usize) {
+    // `depth` caps the recursion so a pathologically deep expression tree
+    // truncates deterministically (the truncation point depends only on the
+    // AST shape) instead of overflowing the stack, which would abort the
+    // process outright. Real function bodies never approach the cap.
+    fn walk(node: tree_sitter::Node, acc: &mut u64, count: &mut usize, depth: usize) {
+        if depth >= crate::MAX_RECURSION_DEPTH {
+            return;
+        }
         let kind = node.kind();
         match kind {
             "line_comment" | "block_comment" => {}
@@ -1757,7 +1806,7 @@ fn structural_hash(body: tree_sitter::Node) -> (u64, usize) {
                 let n = node.child_count();
                 for i in 0..n {
                     if let Some(child) = node.child(i as u32) {
-                        walk(child, acc, count);
+                        walk(child, acc, count, depth + 1);
                     }
                 }
                 mix(")", acc);
@@ -1766,7 +1815,7 @@ fn structural_hash(body: tree_sitter::Node) -> (u64, usize) {
     }
     let mut acc: u64 = 0xcbf29ce484222325;
     let mut count = 0usize;
-    walk(body, &mut acc, &mut count);
+    walk(body, &mut acc, &mut count, 0);
     (acc, count)
 }
 

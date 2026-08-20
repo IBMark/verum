@@ -16,6 +16,7 @@ pub fn parse_file(path: &Path) -> Result<Ir> {
         .ok_or_else(|| anyhow::anyhow!("Failed to parse {}", path.display()))?;
 
     let mut extractor = PhpExtractor {
+        depth: 0,
         source: source.clone(),
         path: path.to_path_buf(),
         next_id: hash_path(path),
@@ -56,6 +57,10 @@ pub fn parse_file(path: &Path) -> Result<Ir> {
 }
 
 struct PhpExtractor {
+    /// Current `walk_node` recursion depth, checked against
+    /// [`crate::MAX_RECURSION_DEPTH`] so a pathologically deep AST cannot
+    /// overflow the stack (an abort no panic guard can catch).
+    depth: usize,
     source: String,
     path: std::path::PathBuf,
     next_id: u64,
@@ -92,7 +97,23 @@ impl PhpExtractor {
         (hash_string(text), hash_normalized(text))
     }
 
+    /// Depth-capped dispatch. A hostile file (10k nested parens, a
+    /// megabyte-long `1+1+...` chain) parses into an AST deep enough that
+    /// recursive descent overflows the stack, and a stack overflow ABORTS
+    /// the process - no unwind, so the per-file panic guard cannot help.
+    /// Nodes deeper than the fixed cap are skipped; the cutoff depends
+    /// only on the input's AST shape (deterministic), and real code never
+    /// comes within an order of magnitude of the cap.
     fn walk_node(&mut self, node: tree_sitter::Node) {
+        if self.depth >= crate::MAX_RECURSION_DEPTH {
+            return;
+        }
+        self.depth += 1;
+        self.walk_node_inner(node);
+        self.depth -= 1;
+    }
+
+    fn walk_node_inner(&mut self, node: tree_sitter::Node) {
         match node.kind() {
             "namespace_definition" => self.handle_namespace(node),
             // Use statements: `use App\Models\User;` or `use App\Models\User as UserModel;`
@@ -802,14 +823,14 @@ impl PhpExtractor {
 
     fn extract_type_from_param(&mut self, param_node: tree_sitter::Node, caller_id: SymbolId) {
         if let Some(type_node) = param_node.child_by_field_name("type") {
-            self.register_type_as_call(type_node, caller_id);
+            self.register_type_as_call(type_node, caller_id, 0);
         } else {
             for i in 0..param_node.child_count() {
                 if let Some(child) = param_node.child(i as u32) {
                     match child.kind() {
                         "named_type" | "qualified_name" | "name" | "optional_type"
                         | "union_type" | "intersection_type" | "nullable_type" => {
-                            self.register_type_as_call(child, caller_id);
+                            self.register_type_as_call(child, caller_id, 0);
                         }
                         _ => {}
                     }
@@ -819,12 +840,24 @@ impl PhpExtractor {
     }
 
     /// Register a type reference as a call (resolving through use aliases).
-    fn register_type_as_call(&mut self, type_node: tree_sitter::Node, caller_id: SymbolId) {
+    ///
+    /// Depth-capped: union/nullable types recurse one level per component, so
+    /// a hostile deeply-nested type expression would otherwise overflow the
+    /// stack. Components past the cap are skipped deterministically.
+    fn register_type_as_call(
+        &mut self,
+        type_node: tree_sitter::Node,
+        caller_id: SymbolId,
+        depth: usize,
+    ) {
+        if depth >= crate::MAX_RECURSION_DEPTH {
+            return;
+        }
         match type_node.kind() {
             "union_type" | "intersection_type" => {
                 for i in 0..type_node.child_count() {
                     if let Some(child) = type_node.child(i as u32) {
-                        self.register_type_as_call(child, caller_id);
+                        self.register_type_as_call(child, caller_id, depth + 1);
                     }
                 }
             }
@@ -832,7 +865,7 @@ impl PhpExtractor {
                 for i in 0..type_node.child_count() {
                     if let Some(child) = type_node.child(i as u32) {
                         if child.kind() != "?" {
-                            self.register_type_as_call(child, caller_id);
+                            self.register_type_as_call(child, caller_id, depth + 1);
                         }
                     }
                 }
