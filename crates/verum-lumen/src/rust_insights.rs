@@ -262,12 +262,29 @@ pub fn analyse_with_context(ir: &Ir, ctx: &ScanContext) -> Vec<Finding> {
             .collect();
         spans.sort_by_key(|s| (s.start, s.end));
 
-        // Smallest enclosing span for a line.
+        // Smallest enclosing span for a line, precomputed per line so each
+        // query is O(1) instead of a scan over every span. Spans are walked in
+        // sorted order and an entry is overwritten only on a STRICTLY smaller
+        // width: ties keep the earliest span, exactly reproducing the old
+        // min_by_key first-wins tie-break.
+        let max_end = spans.iter().map(|s| s.end).max().unwrap_or(0) as usize;
+        let mut encl_idx: Vec<Option<usize>> = vec![None; max_end + 1];
+        let mut encl_width: Vec<u32> = vec![u32::MAX; max_end + 1];
+        for (i, s) in spans.iter().enumerate() {
+            let w = s.end - s.start;
+            for line in (s.start as usize)..=(s.end as usize) {
+                if w < encl_width[line] {
+                    encl_width[line] = w;
+                    encl_idx[line] = Some(i);
+                }
+            }
+        }
         let enclosing = |line: u32| -> Option<&FnSpan> {
-            spans
-                .iter()
-                .filter(|s| s.start <= line && line <= s.end)
-                .min_by_key(|s| s.end - s.start)
+            encl_idx
+                .get(line as usize)
+                .copied()
+                .flatten()
+                .map(|i| &spans[i])
         };
 
         // Inline `#[cfg(test)]` module/fn ranges - findings inside are scaffolding.
