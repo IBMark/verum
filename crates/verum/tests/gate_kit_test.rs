@@ -557,3 +557,66 @@ fn suppressed_findings_and_stale_diagnostics_are_baseline_transparent() {
         String::from_utf8_lossy(&gate.stdout)
     );
 }
+
+// ---------------------------------------------------------------------------
+// Auto-loaded verum.baseline.json (ratchet mode)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_auto_loaded_v2_baseline_ratchets_the_gate() {
+    // `verum baseline <path>` then plain `verum gate <path>` - no flag - must
+    // pick up the fresh v2 verum.baseline.json and waive the inherited
+    // Criticals.
+    let dir = ScratchDir::new("auto-ratchet-v2");
+    let app = dir.path().join("app");
+    copy_tree(&fixture("gate_kit/v1"), &app);
+
+    let output = run_verum(&["baseline", app.to_str().unwrap()]);
+    assert!(output.status.success());
+    assert!(app.join("verum.baseline.json").exists());
+
+    let gate = run_verum(&["gate", app.to_str().unwrap()]);
+    let stdout = String::from_utf8_lossy(&gate.stdout);
+    assert!(
+        gate.status.success(),
+        "v2 auto baseline must waive inherited findings: {stdout}"
+    );
+    assert!(stdout.contains("Baseline active"), "stdout: {stdout}");
+}
+
+#[test]
+fn a_legacy_v1_baseline_file_still_waives_its_findings() {
+    // Baselines written by earlier releases carry textual
+    // `kind|relative/path|message-with-digits-stripped` identities under a
+    // `fingerprints` key. They must keep working unchanged.
+    let dir = ScratchDir::new("auto-ratchet-v1");
+    let app = dir.path().join("app");
+    copy_tree(&fixture("gate_kit/v1"), &app);
+
+    let v1_doc = serde_json::json!({
+        "version": 1,
+        "count": 2,
+        "fingerprints": [
+            "WeakCrypto|app.py|Weak cryptographic function `md()` detected",
+            "EvalUsage|app.py|eval() usage detected - potential code injection",
+        ],
+    });
+    std::fs::write(
+        app.join("verum.baseline.json"),
+        serde_json::to_string_pretty(&v1_doc).unwrap(),
+    )
+    .unwrap();
+
+    let gate = run_verum(&["gate", app.to_str().unwrap()]);
+    let stdout = String::from_utf8_lossy(&gate.stdout);
+    // The two Criticals are waived (the Medium dead-code findings are "new"
+    // to this hand-written baseline, but Medium never gates).
+    assert!(
+        gate.status.success(),
+        "legacy v1 fingerprints must still waive: {stdout}"
+    );
+    assert!(
+        stdout.contains("Baseline active: 2 known finding(s) waived"),
+        "stdout: {stdout}"
+    );
+}
