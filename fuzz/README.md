@@ -57,6 +57,14 @@ targets are for, so turn it off:
 ASAN_OPTIONS=detect_leaks=0 cargo +nightly fuzz run parse_rust corpus/parse_rust
 ```
 
+Throughput varies by two orders of magnitude between targets, and that is
+expected rather than a sign something is stuck. The tree-sitter front-ends run
+at a few thousand cases a second; `lumen_cfg_test_ranges`, which is pure line
+arithmetic, runs at tens of thousands. The infrastructure front-ends
+(`parse_dockerfile`, `parse_terraform`, `parse_kubernetes`) manage only tens,
+because each `parse_file` call compiles its regex set from scratch - so give
+them a longer wall clock to reach comparable depth.
+
 ## When a target crashes
 
 libFuzzer writes the input to `artifacts/<target>/`. Reproduce and minimize it:
