@@ -16,6 +16,31 @@ All notable changes to this project are documented here. The format is based on
   score moves.
 
 ### Added
+- `verum explain <kind>` documents every finding kind Verum can report: what the
+  detector looks for, the concrete consequence of leaving it, a flagged and a
+  fixed example, and when suppressing it is reasonable. It accepts the name as
+  reported (`NonConstantTimeComparison`) or its kebab alias
+  (`non-constant-time-comparison`), case-insensitively; with no argument it
+  lists every kind with a one-line summary, and an unknown kind suggests the
+  closest names. Entries come from one table in the code, so `docs/detectors.md`
+  is generated (`verum explain --all --format markdown`) and a test fails if the
+  two drift apart.
+- Source frames in the human-readable output: `audit` and the markdown report now
+  print the finding's line with two lines of context either side, line-numbered
+  and marked, coloured by severity. `NO_COLOR` (or a non-tty stdout) drops the
+  colour and uses ASCII markers; frames are capped at the first 50 findings per
+  run, with a note when the cap applies. The JSON and SARIF reports are
+  unchanged.
+- `docs/agents.md`, a machine-oriented command reference written to be read
+  in-context by a coding agent: one screen per command with when to use it, the
+  exact invocation, the JSON schema field by field, the exit codes, and a worked
+  example of real output. A test asserts every flag it documents against
+  `--help` in both directions, so the reference cannot drift from the CLI.
+- `integrations/`, ready-to-copy configuration for wiring Verum into the places
+  code changes: a Claude Code `PostToolUse` hook (plus `.mcp.json` registration),
+  a Cursor rule, a `pre-commit` hook, and a GitHub Actions workflow that uploads
+  SARIF to code scanning and runs the gate. Every snippet is syntax-checked in
+  CI and asserted to invoke commands that exist.
 - Line-of-code metrics in `report`: total, code, comment and blank lines per
   file, rolled up per language and per top-level directory, with an nyc-style
   per-file table in the markdown report and a `loc` section in the JSON.

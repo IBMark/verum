@@ -2,6 +2,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// The documentation for every [`FindingKind`], in data: what each detector
+/// looks for, why it matters, a flagged and a fixed example, and when
+/// ignoring it is reasonable. `verum explain` and `docs/detectors.md` both
+/// render from this one table.
+pub mod reference;
+
 /// `path`'s lossy string with backslashes normalized to `/`, for matching
 /// against hardcoded `/`-separated patterns (`"/tests/"`, `"/vendor/"`, file
 /// extensions, ...).

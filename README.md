@@ -66,13 +66,32 @@ verum map <path>        # module/symbol graphs, cycles, SPOFs, data flows
 verum gate <path>       # exit non-zero if the deploy-gate thresholds fail
 verum baseline <path>   # snapshot findings so gate only fails on new ones
 verum report <path>     # markdown | json | sarif | a self-contained html report
+verum explain [kind]    # what a finding kind means, why it matters, how to fix it
 verum init [path]       # write a default verum.standard.json
 ```
 
-`audit` scores the code and lists findings by severity. `clean` reports the
-fixes it would apply - symbols with no caller, duplicate bodies to remap - and
+`audit` scores the code and lists findings by severity, and prints the offending
+source line with two lines of context under each one. `clean` reports the fixes
+it would apply - symbols with no caller, duplicate bodies to remap - and
 identifies each by file and line. It runs report-only and does not modify your
 files; treat its output as a worklist to apply by hand.
+
+## Understanding a finding
+
+`verum explain <kind>` prints what a detector looks for, the concrete
+consequence of ignoring it, a flagged and a fixed example, and when suppressing
+it is a defensible call. It takes the name as reported or its kebab alias:
+
+```
+verum explain NonConstantTimeComparison
+verum explain non-constant-time-comparison
+verum explain                    # every kind, one line each
+```
+
+The same entries, for every detector Verum has, are in
+[docs/detectors.md](docs/detectors.md). That file is generated from the table
+the command reads (`verum explain --all --format markdown`), so the docs and the
+tool cannot disagree.
 
 ## Lines of code and test reachability
 
@@ -146,6 +165,19 @@ Any MCP-capable client can connect over stdio. For example, with Claude Code:
 ```
 claude mcp add verum -- verum mcp /path/to/project
 ```
+
+## For coding agents & CI
+
+[`docs/agents.md`](docs/agents.md) is the command reference written to be read
+in-context by an agent: one screen per command with when to use it, the exact
+invocation, the JSON schema field by field, the exit codes, and a worked example
+of real output. A test asserts every flag it documents against `--help`, so it
+cannot drift from the CLI.
+
+[`integrations/`](integrations/) holds ready-to-copy configuration for the
+places code actually changes - a Claude Code `PostToolUse` hook and MCP
+registration, a Cursor rule, a `pre-commit` hook, and a GitHub Actions workflow
+that uploads SARIF and runs the gate. Every snippet is syntax-checked in CI.
 
 ## Cross-language
 

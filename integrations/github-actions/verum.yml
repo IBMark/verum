@@ -1,0 +1,55 @@
+# Verum in GitHub Actions: SARIF into the Security tab, plus a blocking gate.
+#
+# Copy to .github/workflows/verum.yml. The two jobs are independent on purpose -
+# `sarif` always reports what it found, `gate` decides whether the change is
+# allowed to merge, so a red gate never suppresses the findings list.
+#
+# Paths are relative (`verum report . ...`), which makes the SARIF locations
+# repo-relative. Code scanning needs that to place inline annotations; an
+# absolute path produces a valid file that annotates nothing.
+name: verum
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  sarif:
+    name: report (SARIF)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install verum
+        # binstall pulls the prebuilt binary (seconds); the fallback compiles it.
+        # Add `uses: cargo-bin/cargo-binstall@main` above to guarantee the fast path.
+        run: cargo binstall --no-confirm verum || cargo install verum
+
+      - name: Analyse
+        run: verum report . --format sarif --out verum.sarif
+
+      - name: Upload to code scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: verum.sarif
+
+  gate:
+    name: deploy gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install verum
+        run: cargo binstall --no-confirm verum || cargo install verum
+
+      # Exits 1 when the deploy-gate thresholds fail, which fails the job.
+      # With a committed verum.baseline.json it fails only on new findings.
+      - name: Gate
+        run: verum gate .
