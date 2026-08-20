@@ -1,3 +1,4 @@
+mod check;
 mod graph;
 mod map;
 mod mcp;
@@ -34,6 +35,10 @@ enum Commands {
 
     /// Map + analyse - findings, no changes
     Audit { path: PathBuf },
+
+    /// Machine verdict: analyse and emit pass/fail with per-finding fix hints
+    /// (exit 0 pass, 1 fail, 2 error; see --help for the JSON contract)
+    Check(check::CheckArgs),
 
     /// Map + analyse, and report what dead code/duplicates would be removed (report-only)
     Clean {
@@ -114,6 +119,7 @@ async fn main() -> Result<()> {
     let gate_ok = match cli.command {
         Commands::Analyse { path } => cmd_analyse(&path).await.map(|_| true),
         Commands::Audit { path } => cmd_audit(&path).await.map(|_| true),
+        Commands::Check(args) => std::process::exit(check::cmd_check(&args)),
         Commands::Clean { path, dry_run } => cmd_clean(&path, dry_run).await.map(|_| true),
         Commands::Full { path, dry_run } => cmd_full(&path, dry_run).await,
         Commands::Gate { path } => cmd_gate(&path).await,
@@ -316,7 +322,7 @@ fn severity_label(s: &Severity) -> colored::ColoredString {
     }
 }
 
-fn finding_kind_label(k: &FindingKind) -> &'static str {
+pub(crate) fn finding_kind_label(k: &FindingKind) -> &'static str {
     match k {
         FindingKind::DeadFunction => "DeadFunction",
         FindingKind::DeadClass => "DeadClass",
@@ -417,7 +423,7 @@ fn is_rust_insight(k: &FindingKind) -> bool {
     )
 }
 
-fn is_chain(k: &FindingKind) -> bool {
+pub(crate) fn is_chain(k: &FindingKind) -> bool {
     matches!(k, FindingKind::DangerousChain)
 }
 
