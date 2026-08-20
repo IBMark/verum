@@ -230,10 +230,12 @@ enum CommentSyntax {
 
 fn syntax_for(language: &Language) -> CommentSyntax {
     match language {
-        Language::Rust | Language::Go | Language::Java => CommentSyntax::CFamily {
-            hash: false,
-            single_quote_strings: false,
-        },
+        Language::Rust | Language::Go | Language::Java | Language::CSharp | Language::Cpp => {
+            CommentSyntax::CFamily {
+                hash: false,
+                single_quote_strings: false,
+            }
+        }
         Language::JavaScript | Language::TypeScript => CommentSyntax::CFamily {
             hash: false,
             single_quote_strings: true,
@@ -243,7 +245,11 @@ fn syntax_for(language: &Language) -> CommentSyntax {
             single_quote_strings: true,
         },
         Language::Python | Language::Kubernetes | Language::Docker => CommentSyntax::Hash,
-        Language::Unknown => CommentSyntax::Unknown,
+        // ML-family (`(* *)`) and Haskell (`-- {- -}`) comment counting is not
+        // yet modelled; treated as code-only until their extractors refine it.
+        Language::Ocaml | Language::Haskell | Language::Fstar | Language::Unknown => {
+            CommentSyntax::Unknown
+        }
     }
 }
 

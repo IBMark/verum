@@ -1,13 +1,18 @@
 pub mod composer;
+pub mod cpp;
+pub mod csharp;
 pub mod dockerfile;
 pub mod endpoints;
+pub mod fstar;
 pub mod go_lang;
+pub mod haskell;
 pub mod html;
 pub mod java;
 pub mod java_web;
 pub mod javascript;
 pub mod kubernetes;
 pub mod laravel;
+pub mod ocaml;
 pub mod php;
 pub mod python;
 pub mod resolver;
@@ -474,6 +479,11 @@ impl Atlas {
             Language::Java => java::parse_file(path),
             Language::JavaScript => javascript::parse_file(path, false),
             Language::TypeScript => javascript::parse_file(path, true),
+            Language::Ocaml => ocaml::parse_file(path),
+            Language::Haskell => haskell::parse_file(path),
+            Language::Fstar => fstar::parse_file(path),
+            Language::CSharp => csharp::parse_file(path),
+            Language::Cpp => cpp::parse_file(path),
             _ => {
                 // Stub for other languages: just register the file
                 let mut ir = Ir::new();
@@ -633,6 +643,11 @@ fn language_for_extension(ext: &str) -> Option<Language> {
         "py" => Some(Language::Python),
         "go" => Some(Language::Go),
         "java" => Some(Language::Java),
+        "ml" | "mli" => Some(Language::Ocaml),
+        "hs" => Some(Language::Haskell),
+        "fst" | "fsti" => Some(Language::Fstar),
+        "cs" => Some(Language::CSharp),
+        "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" => Some(Language::Cpp),
         "html" | "htm" => Some(Language::JavaScript),
         _ => None,
     }
