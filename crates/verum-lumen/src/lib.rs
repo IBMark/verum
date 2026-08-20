@@ -224,9 +224,10 @@ impl Prism {
         standard: &Standard,
         root: Option<&std::path::Path>,
     ) -> Result<PrismResult> {
-        let mut findings = Vec::new();
-
-        // Per-pass timing when VERUM_PROFILE is set in the environment.
+        // Per-pass timing when VERUM_PROFILE is set in the environment. The
+        // passes run concurrently below, so individual timings OVERLAP: they
+        // are each pass's own elapsed time, not additive shares of the wall
+        // time, and their print order varies run to run.
         let profile = std::env::var("VERUM_PROFILE").is_ok();
         macro_rules! prof {
             ($name:literal, $e:expr) => {{
@@ -239,23 +240,6 @@ impl Prism {
             }};
         }
 
-        // Root-scoped: reads <root>/Cargo.lock.
-        if let Some(root) = root {
-            findings.extend(prof!("deps", deps::analyse(root)));
-        }
-
-        findings.extend(prof!("crate_semantics", crate_semantics::analyse(ir, root)));
-        findings.extend(prof!(
-            "dead_code",
-            dead_code::analyse(ir, &standard.dead_code)
-        ));
-
-        let (dup_findings, dup_groups) = prof!("duplicates", duplicates::analyse(ir));
-        findings.extend(dup_findings);
-
-        findings.extend(prof!("security", security::analyse(ir, &standard.security)));
-        findings.extend(prof!("crypto_hygiene", crypto_hygiene::analyse(ir)));
-
         // `taint`, `rust_insights` and `transport` are all line scanners over
         // the same tree, and each derived the same two things per file: the
         // file's lines, and the symbols declared in it. Do both once here - the
@@ -264,25 +248,90 @@ impl Prism {
         // symbol per file.
         let scan_ctx = prof!("scan_context", scan::ScanContext::build(ir));
 
-        findings.extend(prof!("taint", taint::analyse_with_context(ir, &scan_ctx).0));
-        findings.extend(prof!("naming", naming::analyse(ir, &standard.naming)));
-        findings.extend(prof!("complexity", complexity::analyse(ir, standard)));
-        findings.extend(prof!("performance", performance::analyse(ir)));
+        // Every pass below reads only (&Ir, &Standard, &ScanContext, root), so
+        // they run concurrently, each collecting into its OWN slot. Determinism
+        // holds because nothing is pushed into a shared Vec from workers: the
+        // slots are merged in the fixed order further down (the order the
+        // passes used to run in), then normalized by the global sort + dedup.
+        let mut deps_f: Vec<Finding> = Vec::new();
+        let mut crate_semantics_f: Vec<Finding> = Vec::new();
+        let mut dead_code_f: Vec<Finding> = Vec::new();
+        let mut duplicates_r: (Vec<Finding>, Vec<DuplicateGroup>) = (Vec::new(), Vec::new());
+        let mut security_f: Vec<Finding> = Vec::new();
+        let mut crypto_hygiene_f: Vec<Finding> = Vec::new();
+        let mut taint_f: Vec<Finding> = Vec::new();
+        let mut naming_f: Vec<Finding> = Vec::new();
+        let mut complexity_f: Vec<Finding> = Vec::new();
+        let mut performance_f: Vec<Finding> = Vec::new();
+        let mut rust_insights_f: Vec<Finding> = Vec::new();
+        let mut transport_f: Vec<Finding> = Vec::new();
+        let mut rbac_f: Vec<Finding> = Vec::new();
+        let mut infrastructure_f: Vec<Finding> = Vec::new();
+        let mut chains_f: Vec<Finding> = Vec::new();
 
-        // Informational; excluded from scoring.
-        findings.extend(prof!(
-            "rust_insights",
-            rust_insights::analyse_with_context(ir, &scan_ctx)
-        ));
-        findings.extend(prof!(
-            "transport",
-            transport::analyse_with_context(ir, &scan_ctx)
-        ));
+        let scan_ctx_ref = &scan_ctx;
+        rayon::scope(|s| {
+            // Root-scoped: reads <root>/Cargo.lock.
+            s.spawn(|_| {
+                if let Some(root) = root {
+                    deps_f = prof!("deps", deps::analyse(root));
+                }
+            });
+            s.spawn(|_| {
+                crate_semantics_f = prof!("crate_semantics", crate_semantics::analyse(ir, root))
+            });
+            s.spawn(|_| {
+                dead_code_f = prof!("dead_code", dead_code::analyse(ir, &standard.dead_code))
+            });
+            s.spawn(|_| duplicates_r = prof!("duplicates", duplicates::analyse(ir)));
+            s.spawn(|_| security_f = prof!("security", security::analyse(ir, &standard.security)));
+            s.spawn(|_| crypto_hygiene_f = prof!("crypto_hygiene", crypto_hygiene::analyse(ir)));
+            s.spawn(|_| {
+                taint_f = prof!("taint", taint::analyse_with_context(ir, scan_ctx_ref).0)
+            });
+            s.spawn(|_| naming_f = prof!("naming", naming::analyse(ir, &standard.naming)));
+            s.spawn(|_| complexity_f = prof!("complexity", complexity::analyse(ir, standard)));
+            s.spawn(|_| performance_f = prof!("performance", performance::analyse(ir)));
+            // Informational; excluded from scoring.
+            s.spawn(|_| {
+                rust_insights_f = prof!(
+                    "rust_insights",
+                    rust_insights::analyse_with_context(ir, scan_ctx_ref)
+                )
+            });
+            s.spawn(|_| {
+                transport_f = prof!(
+                    "transport",
+                    transport::analyse_with_context(ir, scan_ctx_ref)
+                )
+            });
+            s.spawn(|_| rbac_f = prof!("rbac", rbac::analyse(ir)));
+            // K8s/Docker/Terraform findings come pre-built from the atlas phase.
+            s.spawn(|_| infrastructure_f = prof!("infrastructure", infrastructure::analyse(ir)));
+            s.spawn(|_| chains_f = prof!("chains", chains::analyse(ir)));
+        });
 
-        findings.extend(prof!("rbac", rbac::analyse(ir)));
-        // K8s/Docker/Terraform findings come pre-built from the atlas phase.
-        findings.extend(prof!("infrastructure", infrastructure::analyse(ir)));
-        findings.extend(prof!("chains", chains::analyse(ir)));
+        let (dup_findings, dup_groups) = duplicates_r;
+
+        // FIXED merge order - the order the passes ran in sequentially - so the
+        // stable sort + first-wins dedup below see the same sequence they
+        // always did, regardless of which worker finished first.
+        let mut findings = Vec::new();
+        findings.extend(deps_f);
+        findings.extend(crate_semantics_f);
+        findings.extend(dead_code_f);
+        findings.extend(dup_findings);
+        findings.extend(security_f);
+        findings.extend(crypto_hygiene_f);
+        findings.extend(taint_f);
+        findings.extend(naming_f);
+        findings.extend(complexity_f);
+        findings.extend(performance_f);
+        findings.extend(rust_insights_f);
+        findings.extend(transport_f);
+        findings.extend(rbac_f);
+        findings.extend(infrastructure_f);
+        findings.extend(chains_f);
 
         // Drop source-hygiene and security findings that land in test, example,
         // vendored, or generated files - they are noise, not shipped-code
