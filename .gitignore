@@ -4,10 +4,10 @@
 *.swp
 /verum.baseline.json
 
-# AI-assistant scratch — never commit
-CLAUDE.md
-AGENTS.md
-AGENT.md
-.claude/
-.cursor/
-.aider*
+# Fuzzing: build output, libFuzzer's own generated corpus and its artifacts are
+# all reproducible. The seed corpora under fuzz/seeds/ are committed.
+/fuzz/target
+/fuzz/corpus
+/fuzz/artifacts
+/fuzz/coverage
+/fuzz/Cargo.lock

@@ -1,0 +1,6 @@
+#[cfg(test)]
+mod a {}
+#[cfg(test)]
+mod b {}
+#[cfg(test)]
+mod c {

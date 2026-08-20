@@ -1,0 +1,1 @@
+export class Widget { constructor(name) { this.name =

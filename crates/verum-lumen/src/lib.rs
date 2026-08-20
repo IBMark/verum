@@ -5,6 +5,10 @@ pub mod crypto_hygiene;
 pub mod dead_code;
 pub mod deps;
 pub mod duplicates;
+/// In-memory entry points for the out-of-tree fuzz targets in `fuzz/`.
+/// Compiled only under the off-by-default `fuzzing` feature.
+#[cfg(feature = "fuzzing")]
+pub mod fuzz_api;
 pub mod infrastructure;
 pub mod lcov;
 pub mod loc;

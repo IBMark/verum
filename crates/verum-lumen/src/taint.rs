@@ -194,7 +194,10 @@ struct SpanIndex {
 }
 
 impl SpanIndex {
-    fn build(ir: &Ir, ctx: &ScanContext, file: &Path) -> Self {
+    /// `line_count` is the file's length: the index is only ever queried for a
+    /// line that exists, so a span reaching past the end encloses nothing and
+    /// must not be allowed to size the table.
+    fn build(ir: &Ir, ctx: &ScanContext, file: &Path, line_count: usize) -> Self {
         let mut spans: Vec<(SymbolId, u32, u32)> = ctx
             .symbols(file)
             .iter()
@@ -212,12 +215,20 @@ impl SpanIndex {
         // Fill line -> smallest enclosing span, walking spans in sorted order
         // and overwriting only on a STRICTLY smaller width: ties then keep the
         // earliest span, exactly reproducing the old min_by_key first-wins.
-        let max_end = spans.iter().map(|(_, _, end)| *end).max().unwrap_or(0) as usize;
+        let max_end = spans
+            .iter()
+            .map(|(_, _, end)| *end as usize)
+            .max()
+            .unwrap_or(0)
+            .min(line_count);
         let mut by_line: Vec<Option<SymbolId>> = vec![None; max_end + 1];
         let mut width: Vec<u32> = vec![u32::MAX; max_end + 1];
         for (id, start, end) in &spans {
-            let w = end - start;
-            for line in (*start as usize)..=(*end as usize) {
+            // A symbol whose `line_end` precedes its `line_start` is malformed,
+            // but it arrives from the IR rather than from this pass, so it gets
+            // clamped rather than trusted - the plain subtraction underflowed.
+            let w = end.saturating_sub(*start);
+            for line in (*start as usize)..=(*end as usize).min(max_end) {
                 if w < width[line] {
                     width[line] = w;
                     by_line[line] = Some(*id);
@@ -293,7 +304,8 @@ pub fn analyse_with_context(ir: &Ir, ctx: &ScanContext) -> (Vec<Finding>, Vec<Ta
             Language::Rust => ScanLang::Rust,
             _ => ScanLang::Js,
         };
-        contents.push((path.clone(), lang, lines, SpanIndex::build(ir, ctx, path)));
+        let spans = SpanIndex::build(ir, ctx, path, lines.len());
+        contents.push((path.clone(), lang, lines, spans));
     }
 
     // Fixpoint over tainted-return function names.

@@ -1704,7 +1704,14 @@ fn expand_use(spec: &str, prefix: &str, out: &mut Vec<(String, String)>, rec: us
     let spec = spec.trim();
     if let Some(brace) = spec.find('{') {
         let head = spec[..brace].trim().trim_end_matches("::");
-        let close = spec.rfind('}').unwrap_or(spec.len());
+        // Only a `}` *after* the `{` closes this group. Searching the whole
+        // spec would pick up a stray earlier brace - which malformed source
+        // readily produces, `tree-sitter` still hands us as a `use` item, and
+        // which then makes `close < brace` and the slice below panic.
+        let close = spec[brace + 1..]
+            .rfind('}')
+            .map(|i| brace + 1 + i)
+            .unwrap_or(spec.len());
         let inner = &spec[brace + 1..close];
         let new_prefix = if head.is_empty() {
             prefix.to_string()
