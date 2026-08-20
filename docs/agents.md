@@ -528,9 +528,11 @@ Exit codes: `0` if the deploy gate passed, `1` if it failed - same rule as
 
 ## Gotchas
 
-- A path Verum cannot read is not an error. It reports `0 files`, scores
-  `100/100`, and exits `0`. A hook pointed at the wrong directory therefore
-  passes forever - check the file count, not just the exit code.
+- `gate` and `check` fail closed on an empty analysis: zero analysable files
+  (wrong or unreadable path) is an operational error (`gate` exits `1` with an
+  `Error:` message, `check` exits `2`), never a pass. The read-only commands
+  (`audit`, `report`, `analyse`) still report `0 files` and score `100/100` on
+  such a path - they diagnose, they do not gate.
 - An unrecognised `--format` silently renders markdown. There is no error.
 - `verum audit` truncates long finding lists in its text output. Counts in the
   section headers are exact; the listing is not. Use `report --format json` when

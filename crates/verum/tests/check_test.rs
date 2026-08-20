@@ -412,3 +412,31 @@ fn stats_line_is_appended_only_when_opted_in() {
     without_stats.as_object_mut().unwrap().remove("duration_ms");
     assert_eq!(with_stats, without_stats);
 }
+
+#[test]
+fn empty_analysis_is_an_operational_error_exit_two() {
+    // A directory with nothing analysable must not produce a passing verdict:
+    // a typo'd hook path would otherwise wave every edit through forever.
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "verum_check_empty_{}_{}",
+        std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("notes.txt"), "not source code").unwrap();
+    let out = run_verum(&["check", dir.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("no analysable files"), "{stderr}");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // gate must fail closed on the same input (exit 1 with an error, not a pass).
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("notes.txt"), "not source code").unwrap();
+    let out = run_verum(&["gate", dir.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("no analysable files"), "{stderr}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

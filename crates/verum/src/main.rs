@@ -1406,6 +1406,18 @@ async fn cmd_gate(
     let result = Prism::analyse_at(&ir, &standard, Some(path))?;
     pb.finish_and_clear();
 
+    // A gate must fail closed: an unreadable, empty, or wrong path used to
+    // analyse zero files, score 100, and PASS - so a typo'd hook path waved
+    // everything through. Zero analysable files is an operational error, not
+    // a verdict.
+    if ir.metadata.total_files == 0 {
+        anyhow::bail!(
+            "no analysable files found under {} - refusing to pass a gate on an empty analysis \
+             (check the path)",
+            display_path(path)
+        );
+    }
+
     print_audit_results(&result);
     if show_suppressed {
         print_suppressed(&result.suppressed);

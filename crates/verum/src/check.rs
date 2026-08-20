@@ -196,6 +196,15 @@ pub(crate) fn cmd_check(args: &CheckArgs) -> i32 {
             return 2;
         }
     };
+    // Fail closed: zero analysable files means the path is wrong or unreadable,
+    // not that the code is clean. A verdict over nothing is not a pass.
+    if ir.metadata.total_files == 0 {
+        eprintln!(
+            "verum check: no analysable files found under {} (check the path)",
+            args.path.display()
+        );
+        return 2;
+    }
     let result = match Prism::analyse_at(&ir, &standard, Some(&args.path)) {
         Ok(r) => r,
         Err(e) => {
