@@ -30,6 +30,22 @@ use std::path::{Path, PathBuf};
 use rayon::prelude::*;
 use verum_nucleus::{Ir, SymbolId};
 
+/// Per-line budget for the line-scanning passes, in bytes.
+///
+/// A generated or minified blob that slips past the mapper's sampling (its
+/// first 64 KiB can look ordinary) presents multi-megabyte single lines, and
+/// several scanners do per-occurrence context extraction that is worst-case
+/// quadratic in line length - one such line can stall a pass for minutes.
+/// Lines longer than this are skipped by the scanners that would otherwise
+/// walk them.
+///
+/// This is a deterministic INPUT-size guard, never a wall-clock timeout: the
+/// decision depends only on the bytes of the file, so identical inputs skip
+/// identical lines on every machine. The cap is far above hand-written code
+/// (which practically never exceeds a few hundred bytes per line) so no
+/// legitimate source loses findings.
+pub const MAX_SCAN_LINE_BYTES: usize = 10_000;
+
 /// Per-file lines and symbol ids, shared by every line-scanning pass.
 #[derive(Debug, Default)]
 pub struct ScanContext {

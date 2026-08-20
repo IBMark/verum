@@ -352,6 +352,9 @@ fn is_informational(kind: &FindingKind) -> bool {
             | FindingKind::LockOnHotPath
             | FindingKind::DangerousChain
             | FindingKind::MissingSafetyComment
+            // A parse isolated after a panic is a diagnostic about the run,
+            // not a defect in the code under audit: no penalty, no cap.
+            | FindingKind::ParseFailure
     )
 }
 

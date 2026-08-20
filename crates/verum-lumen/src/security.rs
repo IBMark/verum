@@ -354,196 +354,223 @@ pub fn analyse_with_context(
                 return findings;
             };
 
-            for (line_idx, line) in lines.iter().enumerate() {
-                let line = line.as_str();
-                let line_num = (line_idx + 1) as u32;
+            // One hostile file must not panic the whole pass: scan under the
+            // panic guard and downgrade a panic to a diagnostic finding.
+            // Reborrow the shared tables so the `move` closure copies
+            // references instead of trying to move them out of the `Fn`
+            // per-file closure.
+            let always_forbid = &always_forbid;
+            let forbid_patterns = &forbid_patterns;
+            let secret_re = &secret_re;
+            let scanned = verum_nucleus::panic_guard::catch(move || {
+                for (line_idx, line) in lines.iter().enumerate() {
+                    let line = line.as_str();
+                    let line_num = (line_idx + 1) as u32;
 
-                // md5 and sha1 are checked independently so a line containing both
-                // reports both.
-                let weak_funcs: &[(&str, &str)] = if dynamic_lang { WEAK_FUNCS } else { &[] };
-                for &(func, pattern) in weak_funcs {
-                    if !contains_at_word_start(line, pattern) {
+                    // Overlong lines are generated blobs, not hand-written source;
+                    // skip them (deterministic input-size guard, see
+                    // `scan::MAX_SCAN_LINE_BYTES`).
+                    if line.len() > crate::scan::MAX_SCAN_LINE_BYTES {
                         continue;
                     }
 
-                    // Comment-only lines never flag, even when the function is on
-                    // the forbid list (`// TODO: replace md5($pw)` is not a call).
-                    if is_comment_line(line) {
-                        continue;
-                    }
-
-                    // Allowlisted context for this function (e.g. md5 for etags):
-                    // skip the finding entirely when the line mentions any of the
-                    // allowed context keywords.
-                    if let Some(contexts) = config.weak_crypto_allowlist.get(func) {
-                        let line_lower = line.to_lowercase();
-                        if contexts
-                            .iter()
-                            .any(|ctx| line_lower.contains(&ctx.to_lowercase()))
-                        {
+                    // md5 and sha1 are checked independently so a line containing both
+                    // reports both.
+                    let weak_funcs: &[(&str, &str)] = if dynamic_lang { WEAK_FUNCS } else { &[] };
+                    for &(func, pattern) in weak_funcs {
+                        if !contains_at_word_start(line, pattern) {
                             continue;
                         }
-                    }
 
-                    let is_always_forbidden = always_forbid.contains(&func);
+                        // Comment-only lines never flag, even when the function is on
+                        // the forbid list (`// TODO: replace md5($pw)` is not a call).
+                        if is_comment_line(line) {
+                            continue;
+                        }
 
-                    let severity = if is_always_forbidden {
-                        Severity::Critical
-                    } else {
-                        classify_weak_crypto_severity(line)
-                    };
+                        // Allowlisted context for this function (e.g. md5 for etags):
+                        // skip the finding entirely when the line mentions any of the
+                        // allowed context keywords.
+                        if let Some(contexts) = config.weak_crypto_allowlist.get(func) {
+                            let line_lower = line.to_lowercase();
+                            if contexts
+                                .iter()
+                                .any(|ctx| line_lower.contains(&ctx.to_lowercase()))
+                            {
+                                continue;
+                            }
+                        }
 
-                    // Info = benign context, don't flag.
-                    if severity == Severity::Info {
-                        continue;
-                    }
+                        let is_always_forbidden = always_forbid.contains(&func);
 
-                    let suggestion = if severity == Severity::Critical {
-                        "Use password_hash() with PASSWORD_ARGON2ID or bcrypt instead".to_string()
-                    } else {
-                        format!(
-                            "Review: `{}()` detected - if used for security purposes, \
+                        let severity = if is_always_forbidden {
+                            Severity::Critical
+                        } else {
+                            classify_weak_crypto_severity(line)
+                        };
+
+                        // Info = benign context, don't flag.
+                        if severity == Severity::Info {
+                            continue;
+                        }
+
+                        let suggestion = if severity == Severity::Critical {
+                            "Use password_hash() with PASSWORD_ARGON2ID or bcrypt instead"
+                                .to_string()
+                        } else {
+                            format!(
+                                "Review: `{}()` detected - if used for security purposes, \
                          switch to a stronger algorithm",
-                            func
-                        )
-                    };
+                                func
+                            )
+                        };
 
-                    let confidence = match severity {
-                        Severity::Critical => 0.95,
-                        Severity::High => 0.80,
-                        Severity::Medium => 0.60,
-                        _ => 0.40,
-                    };
+                        let confidence = match severity {
+                            Severity::Critical => 0.95,
+                            Severity::High => 0.80,
+                            Severity::Medium => 0.60,
+                            _ => 0.40,
+                        };
 
-                    findings.push(Finding {
-                        id: format!("sec-weakcrypto-{}-{}:{}", func, path.display(), line_num),
-                        kind: FindingKind::WeakCrypto,
-                        severity,
-                        confidence,
-                        file: path.clone(),
-                        line_start: line_num,
-                        line_end: line_num,
-                        symbol: None,
-                        message: format!("Weak cryptographic function `{}()` detected", func),
-                        suggestion,
-                        auto_fixable: false,
-                        related: Vec::new(),
-                    });
-                }
-
-                // Other always-forbidden crypto (des, rc4, ...). Word-boundary check
-                // so "des(" inside "includes(" doesn't match.
-                for (forbidden, pattern) in forbid_patterns.iter().filter(|_| dynamic_lang) {
-                    if is_comment_line(line) {
-                        break;
+                        findings.push(Finding {
+                            id: format!("sec-weakcrypto-{}-{}:{}", func, path.display(), line_num),
+                            kind: FindingKind::WeakCrypto,
+                            severity,
+                            confidence,
+                            file: path.clone(),
+                            line_start: line_num,
+                            line_end: line_num,
+                            symbol: None,
+                            message: format!("Weak cryptographic function `{}()` detected", func),
+                            suggestion,
+                            auto_fixable: false,
+                            related: Vec::new(),
+                        });
                     }
-                    {
-                        if let Some(pos) = line.find(pattern.as_str()) {
-                            let is_word_start = pos == 0
-                                || !line.as_bytes()[pos - 1].is_ascii_alphanumeric()
-                                    && line.as_bytes()[pos - 1] != b'_';
-                            if is_word_start {
-                                findings.push(Finding {
-                                    id: format!(
-                                        "sec-forbidden-{}-{}:{}",
-                                        forbidden,
-                                        path.display(),
-                                        line_num
-                                    ),
-                                    kind: FindingKind::WeakCrypto,
-                                    severity: Severity::Critical,
-                                    confidence: 0.95,
-                                    file: path.clone(),
-                                    line_start: line_num,
-                                    line_end: line_num,
-                                    symbol: None,
-                                    message: format!(
-                                        "Forbidden cryptographic function `{}()` detected",
-                                        forbidden
-                                    ),
-                                    suggestion: "Use a modern cryptographic algorithm".to_string(),
-                                    auto_fixable: false,
-                                    related: Vec::new(),
-                                });
+
+                    // Other always-forbidden crypto (des, rc4, ...). Word-boundary check
+                    // so "des(" inside "includes(" doesn't match.
+                    for (forbidden, pattern) in forbid_patterns.iter().filter(|_| dynamic_lang) {
+                        if is_comment_line(line) {
+                            break;
+                        }
+                        {
+                            if let Some(pos) = line.find(pattern.as_str()) {
+                                let is_word_start = pos == 0
+                                    || !line.as_bytes()[pos - 1].is_ascii_alphanumeric()
+                                        && line.as_bytes()[pos - 1] != b'_';
+                                if is_word_start {
+                                    findings.push(Finding {
+                                        id: format!(
+                                            "sec-forbidden-{}-{}:{}",
+                                            forbidden,
+                                            path.display(),
+                                            line_num
+                                        ),
+                                        kind: FindingKind::WeakCrypto,
+                                        severity: Severity::Critical,
+                                        confidence: 0.95,
+                                        file: path.clone(),
+                                        line_start: line_num,
+                                        line_end: line_num,
+                                        symbol: None,
+                                        message: format!(
+                                            "Forbidden cryptographic function `{}()` detected",
+                                            forbidden
+                                        ),
+                                        suggestion: "Use a modern cryptographic algorithm"
+                                            .to_string(),
+                                        auto_fixable: false,
+                                        related: Vec::new(),
+                                    });
+                                }
                             }
                         }
                     }
+
+                    if dynamic_lang && contains_at_word_start(line, "eval(") {
+                        if is_comment_line(line) {
+                            continue;
+                        }
+
+                        findings.push(Finding {
+                            id: format!("sec-eval-{}:{}", path.display(), line_num),
+                            kind: FindingKind::EvalUsage,
+                            severity: Severity::Critical,
+                            confidence: 0.99,
+                            file: path.clone(),
+                            line_start: line_num,
+                            line_end: line_num,
+                            symbol: None,
+                            message: "eval() usage detected - potential code injection".to_string(),
+                            suggestion: "Remove eval() and use a safe alternative".to_string(),
+                            auto_fixable: false,
+                            related: Vec::new(),
+                        });
+                    }
+
+                    if secret_re.is_match(line) {
+                        if is_comment_line(line) {
+                            continue;
+                        }
+
+                        // Permission constants and example/placeholder values.
+                        let lower = line.to_lowercase();
+                        if lower.contains("permission")
+                            || lower.contains("example")
+                            || lower.contains("placeholder")
+                            || lower.contains("default")
+                            || lower.contains("::class")
+                        {
+                            continue;
+                        }
+
+                        // Identifier-like literals (permission keys, config/route names)
+                        // such as `= 'database.view_password'` aren't credentials.
+                        if quoted_value_is_identifier_like(line) {
+                            continue;
+                        }
+
+                        // Status/label strings that match the key pattern but report
+                        // state rather than a value - `jwt_secret = "configured"`.
+                        if quoted_value_is_status_word(line) {
+                            continue;
+                        }
+
+                        // Templates / interpolated values (`ADMIN_TOKEN='{hash}'`,
+                        // `"${x}"`, `%s`) emit a secret at runtime or are editor
+                        // tokenizer patterns, not literal credentials.
+                        if quoted_value_is_template(line) {
+                            continue;
+                        }
+
+                        findings.push(Finding {
+                            id: format!("sec-secret-{}:{}", path.display(), line_num),
+                            kind: FindingKind::HardcodedSecret,
+                            severity: Severity::Critical,
+                            confidence: 0.80,
+                            file: path.clone(),
+                            line_start: line_num,
+                            line_end: line_num,
+                            symbol: None,
+                            message: "Hardcoded secret detected".to_string(),
+                            suggestion:
+                                "Move secrets to environment variables or a secrets manager"
+                                    .to_string(),
+                            auto_fixable: false,
+                            related: Vec::new(),
+                        });
+                    }
                 }
-
-                if dynamic_lang && contains_at_word_start(line, "eval(") {
-                    if is_comment_line(line) {
-                        continue;
-                    }
-
-                    findings.push(Finding {
-                        id: format!("sec-eval-{}:{}", path.display(), line_num),
-                        kind: FindingKind::EvalUsage,
-                        severity: Severity::Critical,
-                        confidence: 0.99,
-                        file: path.clone(),
-                        line_start: line_num,
-                        line_end: line_num,
-                        symbol: None,
-                        message: "eval() usage detected - potential code injection".to_string(),
-                        suggestion: "Remove eval() and use a safe alternative".to_string(),
-                        auto_fixable: false,
-                        related: Vec::new(),
-                    });
-                }
-
-                if secret_re.is_match(line) {
-                    if is_comment_line(line) {
-                        continue;
-                    }
-
-                    // Permission constants and example/placeholder values.
-                    let lower = line.to_lowercase();
-                    if lower.contains("permission")
-                        || lower.contains("example")
-                        || lower.contains("placeholder")
-                        || lower.contains("default")
-                        || lower.contains("::class")
-                    {
-                        continue;
-                    }
-
-                    // Identifier-like literals (permission keys, config/route names)
-                    // such as `= 'database.view_password'` aren't credentials.
-                    if quoted_value_is_identifier_like(line) {
-                        continue;
-                    }
-
-                    // Status/label strings that match the key pattern but report
-                    // state rather than a value - `jwt_secret = "configured"`.
-                    if quoted_value_is_status_word(line) {
-                        continue;
-                    }
-
-                    // Templates / interpolated values (`ADMIN_TOKEN='{hash}'`,
-                    // `"${x}"`, `%s`) emit a secret at runtime or are editor
-                    // tokenizer patterns, not literal credentials.
-                    if quoted_value_is_template(line) {
-                        continue;
-                    }
-
-                    findings.push(Finding {
-                        id: format!("sec-secret-{}:{}", path.display(), line_num),
-                        kind: FindingKind::HardcodedSecret,
-                        severity: Severity::Critical,
-                        confidence: 0.80,
-                        file: path.clone(),
-                        line_start: line_num,
-                        line_end: line_num,
-                        symbol: None,
-                        message: "Hardcoded secret detected".to_string(),
-                        suggestion: "Move secrets to environment variables or a secrets manager"
-                            .to_string(),
-                        auto_fixable: false,
-                        related: Vec::new(),
-                    });
-                }
+                findings
+            });
+            match scanned {
+                Some(findings) => findings,
+                None => vec![Finding::parse_failure(
+                    path,
+                    "analysis panicked on this file",
+                )],
             }
-            findings
         })
         .collect();
     for file_findings in per_file {
