@@ -291,6 +291,22 @@ pub fn analyse(ir: &Ir, config: &DeadCodeConfig) -> Vec<Finding> {
         .filter_map(|p| p.parent().map(|d| d.to_path_buf()))
         .collect();
 
+    // Classes wired as route controllers - DRF ViewSets/APIViews, Tornado
+    // RequestHandlers, Django CBVs - have their methods dispatched by the
+    // framework by name (`get`, `post`, `list`, `retrieve`, ...), so the call
+    // graph never sees a caller for them. Any method on such a class is
+    // framework-reachable and must not read as dead.
+    let route_controller_classes: HashSet<SymbolId> = ir
+        .routes
+        .iter()
+        .filter_map(|r| r.controller)
+        .filter(|id| {
+            ir.symbols
+                .get(id)
+                .is_some_and(|s| matches!(s.kind, SymbolKind::Class))
+        })
+        .collect();
+
     let mut called_ids: HashSet<SymbolId> = HashSet::new();
     let mut called_names: HashSet<String> = HashSet::new();
     let mut adj: HashMap<SymbolId, Vec<SymbolId>> = HashMap::new();
@@ -363,6 +379,13 @@ pub fn analyse(ir: &Ir, config: &DeadCodeConfig) -> Vec<Finding> {
         }
 
         if sym.is_entry_point {
+            continue;
+        }
+
+        if sym
+            .parent
+            .is_some_and(|p| route_controller_classes.contains(&p))
+        {
             continue;
         }
 

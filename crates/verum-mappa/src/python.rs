@@ -26,6 +26,8 @@ pub fn parse_file(path: &Path) -> Result<Ir> {
         file_scope: None,
         current_module: String::new(),
         router_prefixes: HashMap::new(),
+        router_dependencies: HashMap::new(),
+        symbol_guards: HashMap::new(),
         ir: Ir::new(),
     };
 
@@ -72,7 +74,29 @@ struct PythonExtractor {
     /// Variable name of an `APIRouter(prefix=...)` / `Blueprint(url_prefix=...)`
     /// -> its path prefix, so `@router.get("/x")` routes get the prefix applied.
     router_prefixes: HashMap<String, String>,
+    /// Variable name of an `APIRouter(...)` / `FastAPI(...)` -> the auth
+    /// dependencies declared on its constructor
+    /// (`dependencies=[Depends(get_current_user)]`). FastAPI runs those for
+    /// every route registered on the router, so each such route inherits them
+    /// as middleware.
+    router_dependencies: HashMap<String, Vec<String>>,
+    /// Guards recorded per symbol: decorator guards on view functions/classes
+    /// and DRF `permission_classes` class attributes. Copied onto routes that
+    /// resolve to the symbol later in the file (Django `urls.py` entries, DRF
+    /// router registrations, Tornado handler tables). Cross-file views never
+    /// land here, so their routes keep an empty - "unknown" - middleware list.
+    symbol_guards: HashMap<SymbolId, Vec<String>>,
     ir: Ir,
+}
+
+/// A route declared by a decorator on its handler: the verb, path, router
+/// object name, and any `dependencies=[Depends(...)]` guards declared on the
+/// decorator itself.
+struct DecoratedRoute {
+    method: HttpMethod,
+    path: String,
+    object: String,
+    dependencies: Vec<String>,
 }
 
 impl PythonExtractor {
@@ -236,6 +260,17 @@ impl PythonExtractor {
 
         self.ir.symbols.insert(id, symbol);
 
+        // DRF class-based views declare guards as a class attribute
+        // (`permission_classes = [IsAuthenticated]`); record the class names
+        // so routes that resolve to this class carry them as middleware.
+        let attr_guards = self.class_permission_guards(node);
+        if !attr_guards.is_empty() {
+            self.symbol_guards
+                .entry(id)
+                .or_default()
+                .extend(attr_guards);
+        }
+
         let prev_class = self.current_class.take();
         self.current_class = Some(id);
 
@@ -278,6 +313,14 @@ impl PythonExtractor {
 
         let param_count = count_python_params(node, &self.source);
 
+        // pytest hooks (`pytest_configure`, `pytest_addoption`, ...) in a
+        // conftest.py are called by the test runner through plugin discovery,
+        // never by user code, so they must not read as dead. The conftest.py
+        // gate keeps an unrelated `pytest_helper` in application code from
+        // being exempted by name alone.
+        let is_pytest_hook = name.starts_with("pytest_")
+            && self.path.file_name().is_some_and(|f| f == "conftest.py");
+
         let symbol = Symbol {
             id,
             name,
@@ -295,7 +338,7 @@ impl PythonExtractor {
             normalized_hash,
             flow_hash: normalized_hash,
             param_count,
-            is_entry_point: false,
+            is_entry_point: is_pytest_hook,
             doc_comment,
         };
 
@@ -320,7 +363,21 @@ impl PythonExtractor {
         // decorated_definition wraps the decorators plus the real definition.
         if let Some(definition) = node.child_by_field_name("definition") {
             match definition.kind() {
-                "class_definition" => self.handle_class(definition),
+                "class_definition" => {
+                    // Class-level guards (`@method_decorator(login_required)`
+                    // on a Django CBV) belong to the class symbol so routes
+                    // that resolve to it inherit them. handle_class allocates
+                    // the class's id first, so it is the next allocation.
+                    let guards = self.guard_decorators(node);
+                    let class_id = SymbolId(self.next_id + 1);
+                    self.handle_class(definition);
+                    if !guards.is_empty() {
+                        self.symbol_guards
+                            .entry(class_id)
+                            .or_default()
+                            .extend(guards);
+                    }
+                }
                 "function_definition" => {
                     let mut is_static = false;
                     let child_count = node.child_count();
@@ -342,17 +399,45 @@ impl PythonExtractor {
                     // (before walking its body), so the id it will receive is
                     // the next allocation.
                     let routes = self.route_decorators(node);
+
+                    // The declared guard stack: sibling decorators
+                    // (`@login_required`, `@jwt_required()`) plus FastAPI
+                    // `Depends(...)` in the handler's own signature. Recorded
+                    // as route middleware so the auth pass can tell "declared
+                    // with no guard" apart from "guards not extracted".
+                    let mut guards = self.guard_decorators(node);
+                    guards.extend(self.depends_param_guards(definition));
+
+                    let is_entry = self.entry_point_decorator(node);
                     let func_id = SymbolId(self.next_id + 1);
 
                     self.handle_function(definition);
 
-                    for (method, path, object) in routes {
-                        let full_path = self.apply_prefix(&object, &path);
+                    if is_entry {
+                        if let Some(sym) = self.ir.symbols.get_mut(&func_id) {
+                            sym.is_entry_point = true;
+                        }
+                    }
+
+                    if !guards.is_empty() {
+                        self.symbol_guards.insert(func_id, guards.clone());
+                    }
+
+                    for r in routes {
+                        let full_path = self.apply_prefix(&r.object, &r.path);
+                        let mut middleware = guards.clone();
+                        middleware.extend(r.dependencies);
+                        // Router-level dependencies
+                        // (`APIRouter(dependencies=[...])`) guard every route
+                        // registered on that router.
+                        if let Some(deps) = self.router_dependencies.get(&r.object) {
+                            middleware.extend(deps.iter().cloned());
+                        }
                         self.ir.routes.push(Route {
-                            method,
+                            method: r.method,
                             path: full_path,
                             controller: Some(func_id),
-                            middleware: Vec::new(),
+                            middleware,
                             file: self.path.clone(),
                             line: definition.start_position().row as u32 + 1,
                         });
@@ -407,13 +492,23 @@ impl PythonExtractor {
         });
 
         // `router = APIRouter(prefix="/api")` / `bp = Blueprint(..., url_prefix="/api")`
-        // - remember the prefix keyed by the assigned variable name so route
-        // decorators on that router pick it up.
-        self.record_router_prefix(node, &callee_name);
+        // - remember the prefix (and any constructor-level auth dependencies)
+        // keyed by the assigned variable name so route decorators on that
+        // router pick them up.
+        self.record_router_decl(node, &callee_name);
 
         // Django `path("users/<int:id>/", view)` / `re_path(...)` inside a
         // urls.py `urlpatterns` list -> a route (method Any).
         self.try_extract_django_route(node, &callee_name);
+
+        // DRF `router.register("users", UserViewSet)` -> a route per ViewSet.
+        self.try_extract_viewset_register(node, &callee_name);
+
+        // aiohttp `app.router.add_get("/x", handler)` / `web.get("/x", handler)`.
+        self.try_extract_aiohttp_route(node, &callee_name);
+
+        // Tornado `Application([(r"/x", Handler), ...])` handler tables.
+        self.try_extract_tornado_routes(node, &callee_name);
 
         // Client HTTP calls: `requests.get("http://.../x")`, `httpx.post(...)`,
         // `session.get("/x")`, aiohttp `session.get(...)`.
@@ -508,8 +603,9 @@ impl PythonExtractor {
     }
 
     /// Parse the decorators of a `decorated_definition` for web routes.
-    /// Returns `(method, path, router_object_name)` per route declared.
-    fn route_decorators(&self, decorated: tree_sitter::Node) -> Vec<(HttpMethod, String, String)> {
+    /// Returns one [`DecoratedRoute`] per route declared, carrying any
+    /// `dependencies=[Depends(...)]` guards from the decorator itself.
+    fn route_decorators(&self, decorated: tree_sitter::Node) -> Vec<DecoratedRoute> {
         let mut out = Vec::new();
         for i in 0..decorated.child_count() {
             let Some(child) = decorated.child(i as u32) else {
@@ -555,18 +651,294 @@ impl PythonExtractor {
                 continue;
             }
 
+            let dependencies = self.dependencies_kwarg(args);
+
             if verb.eq_ignore_ascii_case("route") {
-                // Flask/Blueprint: one Route per declared method, default GET.
+                // Flask/Sanic/Blueprint: one Route per declared method,
+                // default GET.
                 let mut methods = self.methods_kwarg(args);
                 if methods.is_empty() {
                     methods.push(HttpMethod::Get);
                 }
                 for m in methods {
-                    out.push((m, path.clone(), object.clone()));
+                    out.push(DecoratedRoute {
+                        method: m,
+                        path: path.clone(),
+                        object: object.clone(),
+                        dependencies: dependencies.clone(),
+                    });
                 }
             } else if let Some(method) = http_method_from_verb(&verb) {
-                // FastAPI / Flask 2+ verb decorators: `@app.get("/x")`.
-                out.push((method, path.clone(), object.clone()));
+                // FastAPI / Flask 2+ / Sanic verb decorators: `@app.get("/x")`.
+                out.push(DecoratedRoute {
+                    method,
+                    path: path.clone(),
+                    object: object.clone(),
+                    dependencies,
+                });
+            }
+        }
+        out
+    }
+
+    /// Unwrap a decorator node to `(trailing_name, base_expr, call_args)`.
+    /// `@login_required`, `@jwt_required()`, and `@celery.task(bind=True)` all
+    /// yield their base name; the call layer's arguments come along so callers
+    /// can look inside `@permission_classes([...])` and friends.
+    fn decorator_parts<'a>(
+        &self,
+        decorator: tree_sitter::Node<'a>,
+    ) -> Option<(String, tree_sitter::Node<'a>, Option<tree_sitter::Node<'a>>)> {
+        let mut expr = None;
+        for i in 0..decorator.child_count() {
+            if let Some(child) = decorator.child(i as u32) {
+                if child.kind() != "@" && child.kind() != "comment" {
+                    expr = Some(child);
+                    break;
+                }
+            }
+        }
+        let mut expr = expr?;
+        let mut args = None;
+        if expr.kind() == "call" {
+            args = expr.child_by_field_name("arguments");
+            expr = expr.child_by_field_name("function")?;
+        }
+        let name = match expr.kind() {
+            "identifier" => self.node_text(expr).to_string(),
+            "attribute" => self
+                .node_text(expr.child_by_field_name("attribute")?)
+                .to_string(),
+            _ => return None,
+        };
+        Some((name, expr, args))
+    }
+
+    /// The declared guard stack of a decorated definition: every sibling
+    /// decorator that is not the route declaration itself or a method-shaping
+    /// builtin. Recording all of them (not just a known-auth list) keeps the
+    /// extraction honest - deciding which names count as auth is the analysis
+    /// pass's job. DRF's `@permission_classes([...])` and Django's
+    /// `@method_decorator(guard, ...)` contribute the wrapped names instead of
+    /// their own.
+    fn guard_decorators(&self, decorated: tree_sitter::Node) -> Vec<String> {
+        const NON_GUARDS: &[&str] = &[
+            // Route declarations - extracted as routes, not guards.
+            "route",
+            "get",
+            "post",
+            "put",
+            "patch",
+            "delete",
+            "head",
+            "options",
+            "websocket",
+            // Method-shaping builtins - they say nothing about access control.
+            "staticmethod",
+            "classmethod",
+            "property",
+            "abstractmethod",
+            "cached_property",
+            // Entry-point markers, handled by entry_point_decorator.
+            "task",
+            "shared_task",
+            "command",
+            "group",
+            "fixture",
+        ];
+        let mut out = Vec::new();
+        for i in 0..decorated.child_count() {
+            let Some(child) = decorated.child(i as u32) else {
+                continue;
+            };
+            if child.kind() != "decorator" {
+                continue;
+            }
+            let Some((name, _, args)) = self.decorator_parts(child) else {
+                continue;
+            };
+            if name == "permission_classes" || name == "method_decorator" {
+                if let Some(args) = args {
+                    out.extend(self.callable_arg_names(args));
+                }
+                continue;
+            }
+            if NON_GUARDS.contains(&name.as_str()) {
+                continue;
+            }
+            out.push(name);
+        }
+        out
+    }
+
+    /// Whether the decorators mark a framework entry point: Celery tasks
+    /// (`@celery.task`, `@app.task`, `@shared_task`), click/Typer commands and
+    /// groups (`@click.command()`, `@cli.group()`), pytest fixtures
+    /// (`@pytest.fixture`). The framework invokes these by registration, so
+    /// the static call graph never sees a caller - without the mark every task
+    /// and CLI command reads as dead code. Bare `@task`/`@command`/`@group`
+    /// are deliberately NOT matched: without the receiver there is no
+    /// framework evidence, and a project-local decorator of the same name
+    /// would silently exempt genuinely dead code.
+    fn entry_point_decorator(&self, decorated: tree_sitter::Node) -> bool {
+        for i in 0..decorated.child_count() {
+            let Some(child) = decorated.child(i as u32) else {
+                continue;
+            };
+            if child.kind() != "decorator" {
+                continue;
+            }
+            let Some((name, expr, _)) = self.decorator_parts(child) else {
+                continue;
+            };
+            let is_attr = expr.kind() == "attribute";
+            match name.as_str() {
+                "shared_task" | "fixture" => return true,
+                "task" | "command" | "group" if is_attr => return true,
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// Dependency names from a `dependencies=[Depends(...), ...]` keyword
+    /// argument (route decorator or APIRouter/FastAPI constructor).
+    fn dependencies_kwarg(&self, args: tree_sitter::Node) -> Vec<String> {
+        let mut out = Vec::new();
+        for i in 0..args.child_count() {
+            let Some(child) = args.child(i as u32) else {
+                continue;
+            };
+            if child.kind() != "keyword_argument" {
+                continue;
+            }
+            let name = child
+                .child_by_field_name("name")
+                .map(|n| self.node_text(n))
+                .unwrap_or("");
+            if name != "dependencies" {
+                continue;
+            }
+            if let Some(value) = child.child_by_field_name("value") {
+                self.collect_depends(value, &mut out, 0);
+            }
+        }
+        out
+    }
+
+    /// FastAPI guards declared in the handler's own signature:
+    /// `def h(user=Depends(get_current_user))`, `Security(...)`, and the
+    /// `Annotated[User, Depends(...)]` type form.
+    fn depends_param_guards(&self, definition: tree_sitter::Node) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Some(params) = definition.child_by_field_name("parameters") {
+            self.collect_depends(params, &mut out, 0);
+        }
+        out
+    }
+
+    /// Collect `Depends(fn)` / `Security(fn)` dependency names anywhere under
+    /// `node`. Keyword lists, parameter defaults, and `Annotated[...]` types
+    /// all nest them differently, so a bounded subtree walk beats enumerating
+    /// every shape.
+    fn collect_depends(&self, node: tree_sitter::Node, out: &mut Vec<String>, depth: usize) {
+        if depth > 32 {
+            return;
+        }
+        if node.kind() == "call" {
+            if let Some(func) = node.child_by_field_name("function") {
+                let name = self.node_text(func);
+                let name = name.rsplit('.').next().unwrap_or(name);
+                if name == "Depends" || name == "Security" {
+                    if let Some(args) = node.child_by_field_name("arguments") {
+                        if let Some(dep) = self.callable_arg_names(args).into_iter().next() {
+                            out.push(dep);
+                        }
+                    }
+                    return;
+                }
+            }
+        }
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i as u32) {
+                self.collect_depends(child, out, depth + 1);
+            }
+        }
+    }
+
+    /// Trailing names of the positional callables in an argument list, looking
+    /// through one list/tuple layer - covers `([IsAuthenticated])` and
+    /// `(login_required, name="dispatch")` alike. Keyword arguments are
+    /// skipped: they configure, they don't guard.
+    fn callable_arg_names(&self, args: tree_sitter::Node) -> Vec<String> {
+        let mut out = Vec::new();
+        for i in 0..args.child_count() {
+            let Some(child) = args.child(i as u32) else {
+                continue;
+            };
+            match child.kind() {
+                "identifier" | "attribute" => {
+                    let text = self.node_text(child);
+                    out.push(text.rsplit('.').next().unwrap_or(text).to_string());
+                }
+                "list" | "tuple" | "set" => out.extend(self.list_callable_names(child)),
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// Trailing names of the callables in a `[A, B]` / `(A, B)` literal, the
+    /// call layer stripped so `[IsAuthenticated]` and `[IsAuthenticated()]`
+    /// read the same.
+    fn list_callable_names(&self, node: tree_sitter::Node) -> Vec<String> {
+        let mut out = Vec::new();
+        for i in 0..node.child_count() {
+            let Some(mut child) = node.child(i as u32) else {
+                continue;
+            };
+            if child.kind() == "call" {
+                if let Some(f) = child.child_by_field_name("function") {
+                    child = f;
+                }
+            }
+            if matches!(child.kind(), "identifier" | "attribute") {
+                let text = self.node_text(child);
+                out.push(text.rsplit('.').next().unwrap_or(text).to_string());
+            }
+        }
+        out
+    }
+
+    /// DRF class attribute guards: `permission_classes = [IsAuthenticated]`
+    /// on a class-based view / ViewSet body.
+    fn class_permission_guards(&self, node: tree_sitter::Node) -> Vec<String> {
+        let mut out = Vec::new();
+        let Some(body) = node.child_by_field_name("body") else {
+            return out;
+        };
+        for i in 0..body.child_count() {
+            let Some(stmt) = body.child(i as u32) else {
+                continue;
+            };
+            if stmt.kind() != "expression_statement" {
+                continue;
+            }
+            let Some(assign) = stmt.child(0) else {
+                continue;
+            };
+            if assign.kind() != "assignment" {
+                continue;
+            }
+            let left = assign
+                .child_by_field_name("left")
+                .map(|n| self.node_text(n))
+                .unwrap_or("");
+            if left != "permission_classes" {
+                continue;
+            }
+            if let Some(right) = assign.child_by_field_name("right") {
+                out.extend(self.list_callable_names(right));
             }
         }
         out
@@ -587,17 +959,17 @@ impl PythonExtractor {
         }
     }
 
-    /// Detect `x = APIRouter(prefix="/api")` / `x = Blueprint(..., url_prefix="/api")`
-    /// and record the prefix under the assigned variable name.
-    fn record_router_prefix(&mut self, call: tree_sitter::Node, callee_name: &str) {
+    /// Detect `x = APIRouter(...)` / `x = Blueprint(...)` / `x = FastAPI(...)`
+    /// and record the declaration's route-relevant settings under the assigned
+    /// variable name: the `prefix=`/`url_prefix=` path prefix, and any
+    /// constructor-level `dependencies=[Depends(...)]` guards, which FastAPI
+    /// applies to every route registered on the router/app.
+    fn record_router_decl(&mut self, call: tree_sitter::Node, callee_name: &str) {
         let ctor = callee_name.rsplit('.').next().unwrap_or(callee_name);
-        if ctor != "APIRouter" && ctor != "Blueprint" {
+        if ctor != "APIRouter" && ctor != "Blueprint" && ctor != "FastAPI" {
             return;
         }
         let Some(args) = call.child_by_field_name("arguments") else {
-            return;
-        };
-        let Some(prefix) = self.prefix_kwarg(args) else {
             return;
         };
         // The call's parent is the assignment; its left side is the var name.
@@ -605,11 +977,19 @@ impl PythonExtractor {
         if parent.kind() != "assignment" {
             return;
         }
-        if let Some(left) = parent.child_by_field_name("left") {
-            let var = self.node_text(left).to_string();
-            let var = var.rsplit('.').next().unwrap_or(&var).to_string();
+        let Some(left) = parent.child_by_field_name("left") else {
+            return;
+        };
+        let var = self.node_text(left).to_string();
+        let var = var.rsplit('.').next().unwrap_or(&var).to_string();
+
+        if let Some(prefix) = self.prefix_kwarg(args) {
             self.router_prefixes
-                .insert(var, normalize_url_path(&prefix));
+                .insert(var.clone(), normalize_url_path(&prefix));
+        }
+        let deps = self.dependencies_kwarg(args);
+        if !deps.is_empty() {
+            self.router_dependencies.insert(var, deps);
         }
     }
 
@@ -634,20 +1014,35 @@ impl PythonExtractor {
             return;
         }
         // Second positional argument is the view - resolve by trailing name.
-        let controller = self.django_view_controller(args);
+        // Guards on the view (decorators, DRF `permission_classes`) become the
+        // route's middleware; a cross-file view resolves to None and keeps an
+        // empty - "unknown" - middleware list.
+        let controller = self.view_arg(args).and_then(|(_, id)| id);
         self.ir.routes.push(Route {
             method: HttpMethod::Any,
             path,
             controller,
-            middleware: Vec::new(),
+            middleware: self.guards_for(controller),
             file: self.path.clone(),
             line: call.start_position().row as u32 + 1,
         });
     }
 
-    /// Resolve the view argument of a Django `path(...)` to a symbol id by its
-    /// trailing identifier (`views.user_detail` -> `user_detail`).
-    fn django_view_controller(&self, args: tree_sitter::Node) -> Option<SymbolId> {
+    /// The recorded guards for a resolved controller symbol, or empty.
+    fn guards_for(&self, controller: Option<SymbolId>) -> Vec<String> {
+        controller
+            .and_then(|id| self.symbol_guards.get(&id))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// The view/handler argument following the first string argument: its
+    /// trailing name, plus the resolved symbol id when it names something in
+    /// this file (`views.user_detail` -> `user_detail`). Class-based views
+    /// arrive as `MyView.as_view()`, so the call layer and the `.as_view`
+    /// suffix are stripped to resolve the class itself. Cross-file references
+    /// resolve to None - best-effort, same-file only.
+    fn view_arg(&self, args: tree_sitter::Node) -> Option<(String, Option<SymbolId>)> {
         let mut seen_string = false;
         for i in 0..args.child_count() {
             let child = args.child(i as u32)?;
@@ -663,16 +1058,175 @@ impl PythonExtractor {
             if !seen_string {
                 continue;
             }
-            let text = self.node_text(child);
-            let view_name = text.rsplit('.').next().unwrap_or(text).trim();
-            return self
+            let mut target = child;
+            if target.kind() == "call" {
+                if let Some(func) = target.child_by_field_name("function") {
+                    target = func;
+                }
+            }
+            let text = self.node_text(target);
+            let text = text.strip_suffix(".as_view").unwrap_or(text);
+            let view_name = text.rsplit('.').next().unwrap_or(text).trim().to_string();
+            let id = self
                 .ir
                 .symbols
                 .values()
                 .find(|s| s.name == view_name)
                 .map(|s| s.id);
+            return Some((view_name, id));
         }
         None
+    }
+
+    /// DRF `router.register(r"users", UserViewSet)` -> one Any-method route
+    /// per registration, the controller resolved to the ViewSet class when it
+    /// lives in the same file. Gated on the receiver being named like a router
+    /// so a plugin registry's `.register(...)` is never misread as a route.
+    fn try_extract_viewset_register(&mut self, call: tree_sitter::Node, callee_name: &str) {
+        let Some((object, method)) = callee_name.rsplit_once('.') else {
+            return;
+        };
+        if method != "register" {
+            return;
+        }
+        let object_tail = object.rsplit('.').next().unwrap_or(object);
+        if !object_tail.to_ascii_lowercase().contains("router") {
+            return;
+        }
+        let Some(args) = call.child_by_field_name("arguments") else {
+            return;
+        };
+        let Some(raw) = self.first_string_arg(args) else {
+            return;
+        };
+        let path = normalize_url_path(&raw);
+        if path.is_empty() {
+            return;
+        }
+        let controller = self.view_arg(args).and_then(|(_, id)| id);
+        self.ir.routes.push(Route {
+            method: HttpMethod::Any,
+            path,
+            controller,
+            middleware: self.guards_for(controller),
+            file: self.path.clone(),
+            line: call.start_position().row as u32 + 1,
+        });
+    }
+
+    /// aiohttp routes: `app.router.add_get("/x", handler)` and route-table
+    /// entries `web.get("/x", handler)`. Both name the handler as a positional
+    /// argument after the path, which is what separates a route declaration
+    /// from an HTTP client call of the same `object.verb(url)` shape - a call
+    /// without a handler argument is left alone.
+    fn try_extract_aiohttp_route(&mut self, call: tree_sitter::Node, callee_name: &str) {
+        let Some((object, method)) = callee_name.rsplit_once('.') else {
+            return;
+        };
+        let object_tail = object.rsplit('.').next().unwrap_or(object);
+
+        let http_method = if let Some(verb) = method.strip_prefix("add_") {
+            // `<router>.add_get(...)`: require a router-named receiver so an
+            // unrelated `cache.add_get(...)` helper never becomes a route.
+            if !object_tail.to_ascii_lowercase().ends_with("router") {
+                return;
+            }
+            match http_method_from_verb(verb) {
+                Some(m) => m,
+                None => return,
+            }
+        } else if object_tail == "web" {
+            // `web.get("/x", handler)` inside an `add_routes([...])` table.
+            match http_method_from_verb(method) {
+                Some(m) => m,
+                None => return,
+            }
+        } else {
+            return;
+        };
+
+        let Some(args) = call.child_by_field_name("arguments") else {
+            return;
+        };
+        let Some(raw) = self.first_string_arg(args) else {
+            return;
+        };
+        // aiohttp route paths always start with a slash; a bare word or full
+        // URL here is a client call or something else entirely.
+        if !raw.starts_with('/') {
+            return;
+        }
+        let path = normalize_url_path(&raw);
+        if path.is_empty() {
+            return;
+        }
+        // The handler argument is mandatory evidence - no handler, no route.
+        let Some((_, controller)) = self.view_arg(args) else {
+            return;
+        };
+        self.ir.routes.push(Route {
+            method: http_method,
+            path,
+            controller,
+            middleware: self.guards_for(controller),
+            file: self.path.clone(),
+            line: call.start_position().row as u32 + 1,
+        });
+    }
+
+    /// Tornado routes: `Application([(r"/x", MainHandler), ...])`. Each
+    /// `(pattern, handler)` tuple in the first list argument becomes an
+    /// Any-method route with the handler class as controller. `URLSpec(...)`
+    /// entries are not unpacked - tuples dominate real Tornado code, and the
+    /// pattern-must-start-with-slash check keeps an unrelated `Application`
+    /// constructor from inventing routes.
+    fn try_extract_tornado_routes(&mut self, call: tree_sitter::Node, callee_name: &str) {
+        let ctor = callee_name.rsplit('.').next().unwrap_or(callee_name);
+        if ctor != "Application" {
+            return;
+        }
+        let Some(args) = call.child_by_field_name("arguments") else {
+            return;
+        };
+        for i in 0..args.child_count() {
+            let Some(list) = args.child(i as u32) else {
+                continue;
+            };
+            if list.kind() != "list" {
+                continue;
+            }
+            for j in 0..list.child_count() {
+                let Some(item) = list.child(j as u32) else {
+                    continue;
+                };
+                if item.kind() != "tuple" {
+                    continue;
+                }
+                let Some(raw) = self.first_string_arg(item) else {
+                    continue;
+                };
+                if !raw.starts_with('/') {
+                    continue;
+                }
+                let path = normalize_url_path(&raw);
+                if path.is_empty() {
+                    continue;
+                }
+                let Some((_, controller)) = self.view_arg(item) else {
+                    continue;
+                };
+                self.ir.routes.push(Route {
+                    method: HttpMethod::Any,
+                    path,
+                    controller,
+                    middleware: self.guards_for(controller),
+                    file: self.path.clone(),
+                    line: item.start_position().row as u32 + 1,
+                });
+            }
+            // Only the first list argument holds the handler table.
+            break;
+        }
     }
 
     /// Record a client HTTP call so the linker can connect it to its route.

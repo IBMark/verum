@@ -1,4 +1,4 @@
-use verum_nucleus::{Finding, FindingKind, Ir, Severity};
+use verum_nucleus::{Finding, FindingKind, Ir, Language, Route, Severity, SymbolKind};
 
 /// Middleware names that count as auth: Laravel's `auth` guard, Spatie
 /// permission/role middleware, and the RawPower-Panel custom aliases.
@@ -17,17 +17,93 @@ const AUTH_MIDDLEWARE: &[&str] = &[
     "signed",
 ];
 
+/// Python guard names that count as auth, compared lowercase: Flask-Login /
+/// Flask-JWT-Extended / Flask-Security decorators, Django auth decorators, DRF
+/// permission classes, and the canonical FastAPI auth dependencies.
+/// `jwt_optional` is included on purpose - optional auth is a deliberate
+/// access decision, not an omission.
+const PYTHON_AUTH_GUARDS: &[&str] = &[
+    "login_required",
+    "auth_required",
+    "auth_token_required",
+    "jwt_required",
+    "fresh_jwt_required",
+    "jwt_optional",
+    "roles_required",
+    "roles_accepted",
+    "permission_required",
+    "permissions_required",
+    "staff_member_required",
+    "user_passes_test",
+    "isauthenticated",
+    "isadminuser",
+    "isauthenticatedorreadonly",
+    "djangomodelpermissions",
+    "djangoobjectpermissions",
+    "get_current_user",
+    "get_current_active_user",
+    "oauth2_scheme",
+];
+
+/// FastAPI guards are plain functions named by their author (`require_auth`,
+/// `verify_jwt`, `check_login`), so no exact list can cover them. Match on
+/// full word components only: `auth` the component matches `require_auth` but
+/// never `author` or `authority`. A false "is auth" here can only silence a
+/// finding or count as project-level auth evidence, so the component set stays
+/// deliberately small.
+fn has_auth_component(lower: &str) -> bool {
+    lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|part| {
+            matches!(
+                part,
+                "auth" | "jwt" | "login" | "authenticated" | "authorized"
+            ) || part.starts_with("oauth")
+        })
+}
+
 /// Matches exactly or as a parameterised form (`auth:sanctum`, `can:edit`) -
 /// a bare prefix match would let `administrator` or `authority` count as auth.
+/// Python guard names match by the exact list or by auth word component.
 fn is_auth_middleware(name: &str) -> bool {
     let lower = name.to_lowercase();
-    AUTH_MIDDLEWARE.iter().any(|&m| {
+    let laravel = AUTH_MIDDLEWARE.iter().any(|&m| {
         if let Some(stripped) = m.strip_suffix(':') {
             lower.starts_with(m) || lower == stripped
         } else {
             lower == m || lower.starts_with(&format!("{}:", m))
         }
-    })
+    });
+    laravel || PYTHON_AUTH_GUARDS.contains(&lower.as_str()) || has_auth_component(&lower)
+}
+
+/// Whether a route belongs to a language: resolved via the controller symbol
+/// when present, else via the route file's extension - route files can
+/// declare routes for controllers that live elsewhere.
+fn route_is_lang(route: &Route, ir: &Ir, lang: Language, ext: &str) -> bool {
+    route
+        .controller
+        .and_then(|id| ir.symbols.get(&id))
+        .map(|s| s.language == lang)
+        .unwrap_or_else(|| route.file.extension().and_then(|e| e.to_str()) == Some(ext))
+}
+
+/// Python endpoints that are public by design - the auth/session lifecycle
+/// itself, generated API docs, and metrics scrapes. Path-substring based, so
+/// it errs toward silence (`/tokens` management APIs are skipped too) - a
+/// miss here is cheaper than flagging every login form.
+const PYTHON_PUBLIC_PATH_MARKERS: &[&str] = &[
+    "login", "logout", "register", "signup", "sign-up", "signin", "sign-in", "token", "oauth",
+    "password", "webhook", "callback", "docs", "openapi", "metrics", "favicon",
+];
+
+/// App-level middleware hooks in a Python route file: auth applied in
+/// `@app.before_request` or any middleware registration covers every route
+/// while staying invisible to per-route guard extraction, so a file that
+/// wires either keeps its routes out of the finding set. The bare
+/// "middleware" substring is intentionally broad - it only ever suppresses.
+fn python_app_level_hooks(content: &str) -> bool {
+    content.contains("before_request") || content.contains("middleware")
 }
 
 /// Flag routes with no visible auth middleware. Auth-file routes (login,
@@ -44,7 +120,20 @@ pub fn analyse(ir: &Ir) -> Vec<Finding> {
     let mut files_with_any_group_auth: std::collections::HashSet<std::path::PathBuf> =
         std::collections::HashSet::new();
 
+    // Per Python route file: whether app-level middleware hooks are wired.
+    let mut python_file_app_hooks: std::collections::HashMap<std::path::PathBuf, bool> =
+        std::collections::HashMap::new();
+
     for route in &ir.routes {
+        if route_is_lang(route, ir, Language::Python, "py") {
+            if !python_file_app_hooks.contains_key(&route.file) {
+                let has_hooks = std::fs::read_to_string(&route.file)
+                    .map(|c| python_app_level_hooks(&c))
+                    .unwrap_or(false);
+                python_file_app_hooks.insert(route.file.clone(), has_hooks);
+            }
+            continue;
+        }
         if file_group_ranges.contains_key(&route.file) {
             continue;
         }
@@ -63,37 +152,23 @@ pub fn analyse(ir: &Ir) -> Vec<Finding> {
         file_group_ranges.insert(route.file.clone(), ranges);
     }
 
+    // A Python route with empty middleware means "no guard declared where we
+    // can see it", which is only evidence in a project that declares route
+    // guards at all. A project with zero auth anywhere may sit behind a
+    // gateway or service mesh that terminates auth before the app - staying
+    // silent there is the deliberate trade, false positives cost more than
+    // misses.
+    let python_project_uses_auth = ir.routes.iter().any(|r| {
+        route_is_lang(r, ir, Language::Python, "py")
+            && r.middleware.iter().any(|m| is_auth_middleware(m))
+    });
+
     for route in &ir.routes {
         if route.path.is_empty() {
             continue;
         }
 
-        // Middleware extraction is only reliable for Laravel/PHP routes. For
-        // Rust/Go/Java/Python frameworks we extract the route but not its
-        // middleware/guards, so an empty middleware list is "unknown", not "no
-        // auth" - flagging those would report MissingAuthMiddleware on every
-        // non-PHP route (a false positive on the whole backend).
-        let is_php_route = route
-            .controller
-            .and_then(|id| ir.symbols.get(&id))
-            .map(|s| matches!(s.language, verum_nucleus::Language::Php))
-            .unwrap_or_else(|| route.file.extension().and_then(|e| e.to_str()) == Some("php"));
-        if !is_php_route {
-            continue;
-        }
-
-        let has_route_auth = route.middleware.iter().any(|m| is_auth_middleware(m));
-        if has_route_auth {
-            continue;
-        }
-
-        // auth.php holds login/register/reset routes, which are public by design.
-        let file_name = route
-            .file
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
-        if file_name == "auth.php" || file_name == "admin.php" {
+        if route.middleware.iter().any(|m| is_auth_middleware(m)) {
             continue;
         }
 
@@ -106,24 +181,98 @@ pub fn analyse(ir: &Ir) -> Vec<Finding> {
             continue;
         }
 
-        let covered_by_group = if let Some(ranges) = file_group_ranges.get(&route.file) {
-            ranges
-                .iter()
-                .any(|(start, end)| route.line >= *start && route.line <= *end)
-        } else {
-            false
-        };
+        // Middleware extraction is reliable for Laravel/PHP routes and for
+        // Python routes declared as a decorator on their own handler. For
+        // everything else - Rust/Go/Java frameworks, Django urls.py entries,
+        // DRF registrations, aiohttp tables, Tornado handler lists - we
+        // extract the route but the guards may live in another file, so an
+        // empty middleware list there is "unknown", not "no auth"; flagging
+        // it would report MissingAuthMiddleware on the whole backend.
+        let is_php_route = route
+            .controller
+            .and_then(|id| ir.symbols.get(&id))
+            .map(|s| matches!(s.language, Language::Php))
+            .unwrap_or_else(|| route.file.extension().and_then(|e| e.to_str()) == Some("php"));
 
-        if covered_by_group {
+        let confidence = if is_php_route {
+            // auth.php holds login/register/reset routes, public by design.
+            let file_name = route
+                .file
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            if file_name == "auth.php" || file_name == "admin.php" {
+                continue;
+            }
+
+            let covered_by_group = if let Some(ranges) = file_group_ranges.get(&route.file) {
+                ranges
+                    .iter()
+                    .any(|(start, end)| route.line >= *start && route.line <= *end)
+            } else {
+                false
+            };
+
+            if covered_by_group {
+                continue;
+            }
+            0.90
+        } else if route_is_lang(route, ir, Language::Python, "py") {
+            if !python_project_uses_auth {
+                continue;
+            }
+            if PYTHON_PUBLIC_PATH_MARKERS
+                .iter()
+                .any(|m| path_lower.contains(m))
+            {
+                continue;
+            }
+            // An explicitly-public declaration (DRF's AllowAny) is a
+            // decision, not an omission.
+            if route
+                .middleware
+                .iter()
+                .any(|m| m.eq_ignore_ascii_case("allowany"))
+            {
+                continue;
+            }
+            // Only decorator-declared routes (Flask/FastAPI/Sanic) have
+            // their full guard stack visible: the route and its handler
+            // share a definition site, so route.line equals the handler's
+            // first line. Any other shape keeps its "unknown" status.
+            let decorator_declared = route
+                .controller
+                .and_then(|id| ir.symbols.get(&id))
+                .is_some_and(|s| {
+                    matches!(s.kind, SymbolKind::Function | SymbolKind::Method)
+                        && route.line == s.line_start
+                });
+            if !decorator_declared {
+                continue;
+            }
+            // App-level hooks (`before_request`, middleware registration) in
+            // the same file may auth-gate every route; extraction cannot see
+            // inside them, so the whole file stays quiet.
+            if python_file_app_hooks
+                .get(&route.file)
+                .copied()
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            // Lower than the PHP path: ASGI/WSGI middleware wired in another
+            // module can still be guarding this route.
+            0.80
+        } else {
             continue;
-        }
+        };
 
         findings.push(Finding {
             fingerprint: String::new(),
             id: format!("rbac-noauth-{}-{}", route.method_str(), route.path),
             kind: FindingKind::MissingAuthMiddleware,
             severity: Severity::High,
-            confidence: 0.90,
+            confidence,
             file: route.file.clone(),
             line_start: route.line,
             line_end: route.line,
