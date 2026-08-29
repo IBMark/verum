@@ -1739,10 +1739,11 @@ detector_table! {
     VulnerableDependency {
         category: "Dependencies",
         summary: "A locked dependency version matching a known advisory",
-        detects: "A package in `Cargo.lock` whose name and version fall within an entry of the \
-                  offline advisory table Verum ships. The match is purely local - no network \
-                  request is made - so the table is a seed set, not a substitute for a \
-                  full advisory database.",
+        detects: "A package in `Cargo.lock`, or pinned exactly in `requirements.txt`, \
+                  `poetry.lock` or `uv.lock`, whose name and version fall within an entry of \
+                  the offline advisory table Verum ships. The match is purely local - no \
+                  network request is made - so the table is a seed set, not a substitute for \
+                  a full advisory database. Unpinned Python ranges are never guessed at.",
         why: "A known vulnerability with a published advisory is a vulnerability with a \
               published exploit path and an automated scanner looking for it. These are \
               compromised by opportunists, not by targeted attackers.",

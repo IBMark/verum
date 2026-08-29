@@ -290,7 +290,8 @@ impl Prism {
     }
 
     /// Run all analysis passes, plus the filesystem-rooted dependency audit
-    /// when a project root is supplied (it reads `<root>/Cargo.lock`).
+    /// when a project root is supplied (it reads `<root>/Cargo.lock` and the
+    /// Python lockfiles - requirements.txt, poetry.lock, uv.lock).
     pub fn analyse_at(
         ir: &Ir,
         standard: &Standard,
@@ -349,7 +350,7 @@ impl Prism {
 
         let scan_ctx_ref = &scan_ctx;
         rayon::scope(|s| {
-            // Root-scoped: reads <root>/Cargo.lock.
+            // Root-scoped: reads the lockfiles at <root>.
             s.spawn(|_| {
                 if let Some(root) = root {
                     deps_f = prof!("deps", deps::analyse(root));
