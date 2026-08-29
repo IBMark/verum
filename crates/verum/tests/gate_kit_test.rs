@@ -400,7 +400,13 @@ fn kind_locations(findings: &serde_json::Value) -> Vec<(String, String, u64)> {
         .iter()
         .map(|f| {
             let file = f["file"].as_str().expect("file");
-            let base = file.rsplit('/').next().unwrap_or(file).to_string();
+            // Report paths are native, so split on both separators (Windows
+            // reports `fixtures\app.py`).
+            let base = file
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or(file)
+                .to_string();
             (
                 f["kind"].as_str().expect("kind").to_string(),
                 base,
