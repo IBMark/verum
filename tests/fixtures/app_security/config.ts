@@ -1,5 +1,5 @@
 // Service configuration. The live-mode key literal below is the classic
-// AI-generated-config leak shape; the env read underneath is the safe idiom.
+// copy-pasted-config leak shape; the env read underneath is the safe idiom.
 import Stripe from 'stripe';
 
 export const stripe = new Stripe('sk_live_9aB3cD4eF5gH6iJ7');
