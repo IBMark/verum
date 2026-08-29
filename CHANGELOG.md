@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.7] - 2026-08-29
 
 ### Added
 - **Python/TypeScript/JavaScript security parity.** The app-security
@@ -69,6 +69,45 @@ All notable changes to this project are documented here. The format is based on
   - **`AssertAsValidation` (Low).** `assert` on request/input-shaped
     identifiers in non-test functions - stripped under `python -O`. Test
     files are skipped and `is not None` narrowing is excluded.
+- **`MissingAuthMiddleware` for Python routes.** The front-end now extracts
+  route guards - Flask sibling decorators (`@login_required`,
+  `@jwt_required()`, ...), FastAPI `Depends`/`Security` on decorators,
+  parameter defaults, `Annotated` types, and router constructors (inherited
+  by every route on that router), Django/DRF `@login_required`,
+  `@permission_required`, `permission_classes` - and the rbac pass flags an
+  unguarded route only when the guard stack was fully visible
+  (decorator-declared) AND the project demonstrably uses auth elsewhere. A
+  project with no auth anywhere stays silent: it may sit behind a gateway.
+- **Wider Python framework surface.** Routes from DRF class-based views and
+  ViewSet registration, aiohttp (`router.add_get`, `web.get` route tables),
+  Sanic, and Tornado application tuples. Celery tasks, click/Typer commands,
+  pytest fixtures, and `conftest.py` hooks count as entry points, so the
+  dead-code pass stops flagging them.
+- **The offline dependency audit reads Python lockfiles.**
+  `requirements.txt` (exact `==` pins only - ranges are never guessed),
+  `poetry.lock`, and `uv.lock`, PEP 503 name normalization, matched against
+  a curated PyPA advisory seed (PyYAML, requests, urllib3, Jinja2, lxml,
+  aiohttp, Werkzeug) with the same rule as the Rust seed: an advisory ships
+  only when its affected-version boundary is certain. Django/Flask are
+  deliberately absent - their fixes are backported across parallel release
+  series, which a single-boundary model would misreport.
+- Registry manifests: `server.json` for the official MCP registry and
+  `smithery.yaml` for Smithery, both serving `verum mcp` over stdio.
+
+### Fixed
+- **The HTML report and system map rendered blank.** Both templates still
+  carried their pre-rename data placeholders, so the JSON payload was never
+  injected and the page's `JSON.parse` failed on the placeholder text.
+- **The LOC directory rollup was broken on Windows.** `canonicalize` returns
+  a `\\?\`-prefixed verbatim path there, the root prefix check always
+  failed, and the common-ancestor fallback swallowed the shared top-level
+  directory - every file rolled up under `.`.
+- The release pipeline creates the GitHub Release it uploads binaries to
+  (every 0.1.5/0.1.6 asset upload had died on "release not found"; 0.1.6
+  binaries are published now), and CI actually passes on Windows: LF
+  checkouts via `.gitattributes` for the byte-compare doc tests, CRLF
+  normalization in frontmatter parsing, native-path handling in test
+  helpers, and `--no-fail-fast` so one run reports every platform failure.
 
 ## [0.1.6] - 2026-08-20
 

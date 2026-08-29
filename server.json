@@ -6,13 +6,13 @@
     "url": "https://github.com/IBMark/verum",
     "source": "github"
   },
-  "version": "0.1.6",
+  "version": "0.1.7",
   "packages": [
     {
       "registryType": "cargo",
       "registryBaseUrl": "https://crates.io",
       "identifier": "verum",
-      "version": "0.1.6",
+      "version": "0.1.7",
       "transport": { "type": "stdio" },
       "packageArguments": [
         { "type": "positional", "value": "mcp", "isRequired": true },
@@ -27,7 +27,7 @@
     },
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/ibmark/verum:0.1.6",
+      "identifier": "ghcr.io/ibmark/verum:0.1.7",
       "transport": { "type": "stdio" },
       "packageArguments": [
         { "type": "positional", "value": "mcp", "isRequired": true },
