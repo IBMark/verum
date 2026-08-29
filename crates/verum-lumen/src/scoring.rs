@@ -139,7 +139,9 @@ pub fn compute(ir: &Ir, findings: &[Finding], reachability: &TestReachability) -
             | FindingKind::PathTraversal
             | FindingKind::OpenRedirect
             | FindingKind::NonConstantTimeComparison
-            | FindingKind::StaticAeadNonce => {
+            | FindingKind::StaticAeadNonce
+            | FindingKind::TlsVerificationDisabled
+            | FindingKind::UnsafeDeserialization => {
                 let penalty = match &f.severity {
                     Severity::Critical => 15,
                     Severity::High => 5,

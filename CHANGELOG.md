@@ -4,6 +4,41 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Python/TypeScript/JavaScript security parity.** The app-security
+  detectors that used to be PHP-first now cover the languages most new
+  services ship in:
+  - `HardcodedSecret` also fires on provider-shaped token literals
+    (`sk_live_`, `AKIA`, `ghp_`, `github_pat_`, `xoxb-`/`xoxp-`, `glpat-`,
+    and PEM private-key blocks with actual key material) regardless of the
+    variable name, with env-read, template-interpolation, placeholder, and
+    pattern-table exclusions.
+  - `WeakCrypto` also fires on `crypto.createHash('md5'|'sha1')` - only when
+    the line's identifiers carry a sensitive word (password, token, secret,
+    ...), so cache keys and etags stay silent.
+  - `WeakRandom` now has an emitting detector: `Math.random()` /
+    `random.random()`/`randint`/`getrandbits` feeding a value whose name
+    says password/secret/token/otp/nonce/salt. Word-component matching, so a
+    parser's `tokens` never matches `token`.
+  - `NonConstantTimeComparison` extends from Rust to Python and JS/TS,
+    including `===`/`!==` and camelCase identifier splitting
+    (`computedSignature === header` is the canonical webhook miss), with
+    `hmac.compare_digest`/`crypto.timingSafeEqual`/`hash_equals` recognized
+    as safe, and new metadata guards (`signature.length == 64`,
+    `digest_size == 32` stay silent) applied across all languages.
+  - `EvalUsage` also fires on bare Python `exec(` with a non-literal
+    argument (method calls like PyQt's `dialog.exec()` are excluded).
+- **`TlsVerificationDisabled` (High).** `rejectUnauthorized: false`,
+  `NODE_TLS_REJECT_UNAUTHORIZED=0`, `verify=False` on a `requests`/`httpx`
+  call, `ssl._create_unverified_context()`, `verify_mode = ssl.CERT_NONE`.
+- **`UnsafeDeserialization` (High).** `pickle.load(s)` on non-literal input,
+  `yaml.load` without a safe loader, `yaml.unsafe_load`, and `new Function`
+  built from non-literal text.
+- All of the above verified against the 22-repo false-positive corpus with
+  zero new findings.
+
 ## [0.1.6] - 2026-08-20
 
 ### Added

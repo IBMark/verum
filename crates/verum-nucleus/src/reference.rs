@@ -499,12 +499,15 @@ detector_table! {
     WeakCrypto {
         category: "Security",
         summary: "A broken hash or cipher used where security depends on it",
-        detects: "A call to `md5()` or `sha1()` in PHP, JavaScript, TypeScript, or Python, \
-                  classified by the words on the same line: password, token, secret, auth, \
-                  signature, or HMAC context raises it to critical; cache-key, ETag, checksum, \
-                  gravatar, and fingerprint context suppresses it entirely. Algorithms listed \
-                  in `code.security.forbid_weak_crypto` in `verum.standard.json` are always \
-                  flagged, and that file can also allowlist specific contexts.",
+        detects: "A call to `md5()` or `sha1()` in PHP, JavaScript, TypeScript, or Python \
+                  (including `hashlib.md5`), classified by the words on the same line: \
+                  password, token, secret, auth, signature, or HMAC context raises it to \
+                  critical; cache-key, ETag, checksum, gravatar, and fingerprint context \
+                  suppresses it entirely. `crypto.createHash('md5'|'sha1')` in \
+                  JavaScript/TypeScript is flagged only when such a sensitive word appears on \
+                  the line. Algorithms listed in `code.security.forbid_weak_crypto` in \
+                  `verum.standard.json` are always flagged, and that file can also allowlist \
+                  specific contexts.",
         why: "MD5 and SHA-1 are collision-broken and, for passwords, so fast that an offline \
               attacker tries billions of candidates a second on commodity hardware. A stolen \
               hash column is a stolen password column.",
@@ -524,13 +527,16 @@ detector_table! {
     HardcodedSecret {
         category: "Security",
         summary: "A credential-shaped literal committed in source",
-        detects: "An assignment whose name mentions password, secret, API key, token, access \
-                  key, or private key and whose value is a quoted literal of at least eight \
-                  characters. Placeholders, template expressions containing `{`, `$`, `%` or \
-                  `<`, identifier-like values, status words such as `configured` or `redacted`, \
-                  and comment lines are all filtered out - except when the value carries a \
-                  known credential prefix (`sk-`, `ghp_`, `xoxb-`, `AKIA`, `glpat-`, ...), \
-                  which overrides the filters.",
+        detects: "An assignment whose name mentions password, passphrase, secret, API key, \
+                  token, access key, or private key and whose value is a quoted literal of at \
+                  least eight characters; and, independent of the name, a provider-shaped \
+                  token literal in Python/JavaScript/TypeScript (`sk_live_`, `AKIA`, `ghp_`, \
+                  `github_pat_`, `xoxb-`/`xoxp-`, `glpat-`, or a PEM private-key block with \
+                  key material). Placeholders, template expressions containing `{`, `$`, `%` \
+                  or `<`, identifier-like values, status words such as `configured` or \
+                  `redacted`, env-var reads, and comment lines are all filtered out - except \
+                  when the value carries a known credential prefix (`sk-`, `ghp_`, `xoxb-`, \
+                  `AKIA`, `glpat-`, ...), which overrides the filters.",
         why: "A secret in git is a secret in every clone, every fork, every CI cache, and every \
               backup of the repository - permanently. Rotating it is the only remediation, and \
               the clock starts at the commit, not at the discovery.",
@@ -567,6 +573,55 @@ detector_table! {
         suppress: "Practically never for the taint form. The literal form is defensible in a \
                    build or codegen script that runs on trusted input only, never on a request \
                    path.",
+    }
+
+    TlsVerificationDisabled {
+        category: "Security",
+        summary: "TLS certificate verification switched off on an HTTPS client",
+        detects: "`rejectUnauthorized: false` or `NODE_TLS_REJECT_UNAUTHORIZED=0` in \
+                  JavaScript/TypeScript; `verify=False` on a `requests`/`httpx` call, \
+                  `ssl._create_unverified_context()`, or `verify_mode = ssl.CERT_NONE` in \
+                  Python. Comment lines and test/vendored paths are excluded.",
+        why: "With verification off the client encrypts to whoever answered the connection. \
+              Any on-path attacker - a hostile network, a compromised router, a rogue proxy - \
+              can present any certificate and silently read or rewrite the traffic, including \
+              the credentials the connection was supposed to protect.",
+        lang: "python",
+        bad: r#"
+            resp = requests.post(WEBHOOK_URL, json=payload, verify=False)
+        "#,
+        good: r#"
+            resp = requests.post(WEBHOOK_URL, json=payload)  # verification stays on
+        "#,
+        suppress: "A local development script talking to a self-signed endpoint that never \
+                   handles production data - and even then, pinning the self-signed \
+                   certificate (`verify=path/to/ca.pem`, `ca` option) is the fix that keeps \
+                   working in production.",
+    }
+
+    UnsafeDeserialization {
+        category: "Security",
+        summary: "Deserialization that can execute code during decoding",
+        detects: "`pickle.load(`/`pickle.loads(` on a non-literal argument, `yaml.load(` \
+                  without `SafeLoader`/`FullLoader`, and `yaml.unsafe_load(` in Python; \
+                  `new Function(` built from non-literal text in JavaScript/TypeScript. \
+                  Literal arguments and comment lines are excluded.",
+        why: "These decoders run code as a feature: a pickle byte-stream can invoke any \
+              callable while loading, a full YAML loader instantiates arbitrary Python \
+              objects, and `new Function` compiles its argument as JavaScript. Feeding any \
+              of them attacker-influenced data is remote code execution, not a parsing bug.",
+        lang: "python",
+        bad: r#"
+            config = yaml.load(request.data)
+            session = pickle.loads(cookie_bytes)
+        "#,
+        good: r#"
+            config = yaml.safe_load(request.data)
+            session = json.loads(cookie_text)
+        "#,
+        suppress: "The bytes provably never leave trusted storage the application itself \
+                   wrote (a local cache file with restrictive permissions), or a codegen \
+                   step that runs at build time on checked-in input only.",
     }
 
     MissingAuthMiddleware {
@@ -644,9 +699,11 @@ detector_table! {
     WeakRandom {
         category: "Security",
         summary: "A non-cryptographic random source used for a security value",
-        detects: "A value used as a token, password, key, nonce, or session identifier drawn \
-                  from a predictable generator (`rand()`, `mt_rand()`, `Math.random()`, \
-                  `random.random()`). Reserved: no analysis pass currently emits this kind.",
+        detects: "A predictable generator (`Math.random()` in JavaScript/TypeScript; \
+                  `random.random()`, `random.randint()`, `random.getrandbits()` in Python) on \
+                  a line whose identifiers name a security value - password, secret, token, \
+                  OTP, nonce, salt, or CSRF. Lines without a security-named identifier are \
+                  never flagged, so simulations, sampling, jitter, and games stay quiet.",
         why: "These generators are seeded from low-entropy state and are designed to be fast, \
               not unpredictable. Given a few outputs an attacker can reproduce the sequence and \
               mint the next password-reset token before the user reads their email.",
@@ -1806,12 +1863,15 @@ detector_table! {
     NonConstantTimeComparison {
         category: "Cryptography",
         summary: "A security-sensitive value compared with `==`",
-        detects: "An `==` or `!=` in Rust where one operand names a MAC, CMAC, signature, \
+        detects: "An `==`/`!=` (Rust, Python) or `==`/`===`/`!=`/`!==` \
+                  (JavaScript/TypeScript) where one operand names a MAC, CMAC, signature, \
                   secret, digest, or verifier, or a compound such as `auth_tag`, \
                   `expected_mac`, `csrf_token`, `bearer_token`, or a password-derived hash. \
-                  Lines mentioning `ct_eq`, `ConstantTimeEq`, `subtle::`, or \
-                  `constant_time_eq` are excluded, as are comparisons against string \
-                  literals, booleans, `None`, and enum variants.",
+                  Lines mentioning a constant-time comparison (`ct_eq`, `ConstantTimeEq`, \
+                  `subtle::`, `constant_time_eq`, `hmac.compare_digest`, \
+                  `crypto.timingSafeEqual`, `hash_equals`) are excluded, as are comparisons \
+                  against string literals, booleans, numbers, `None`/`null`/`undefined`, \
+                  enum variants, and length/size/count metadata fields.",
         why: "A byte-wise comparison returns as soon as it finds a mismatch, so how long it \
               took reveals how many leading bytes were right. An attacker who can time the \
               endpoint recovers the tag one byte at a time - a few hundred requests per byte \

@@ -391,6 +391,8 @@ pub(crate) fn kind_why(kind: &FindingKind) -> &'static str {
         WeakCrypto => "This algorithm is cryptographically broken; hashes can be collided or brute-forced far below the intended cost.",
         HardcodedSecret => "A secret committed to source is exposed to everyone with repo access and survives forever in history.",
         EvalUsage => "eval executes arbitrary strings, so any input that reaches it is remote code execution.",
+        TlsVerificationDisabled => "With certificate verification off, any on-path attacker can impersonate the server and read or rewrite the traffic.",
+        UnsafeDeserialization => "This decoder executes code while loading, so attacker-influenced input is remote code execution, not a parse error.",
         MissingAuthMiddleware => "The endpoint is reachable without authentication, exposing its data and actions to anyone.",
         MissingRoleCheck => "Any authenticated user can perform this privileged action, not just the role it was meant for.",
         PotentialIdor => "A request-supplied id is used directly, letting one user read or modify another user's records.",
@@ -482,6 +484,12 @@ pub(crate) fn fix_hint(f: &Finding, ir: &Ir, groups: &[DuplicateGroup], root: &P
         ),
         EvalUsage => format!(
             "replace eval at {spot} with explicit dispatch (a whitelisted map of allowed operations) or a proper parser for the data"
+        ),
+        TlsVerificationDisabled => format!(
+            "re-enable certificate verification at {spot}; for a self-signed endpoint, pin its CA instead (verify=/path/to/ca.pem, the `ca` option) rather than disabling checks"
+        ),
+        UnsafeDeserialization => format!(
+            "switch the decoder at {spot} to a data-only format: yaml.safe_load / SafeLoader, json instead of pickle, and explicit parsing instead of new Function"
         ),
         MissingAuthMiddleware => format!(
             "attach authentication middleware to the route at {spot} (e.g. wrap it in the auth middleware group)"
@@ -845,6 +853,8 @@ mod tests {
             WeakCrypto,
             HardcodedSecret,
             EvalUsage,
+            TlsVerificationDisabled,
+            UnsafeDeserialization,
             MissingAuthMiddleware,
             MissingRoleCheck,
             PotentialIdor,

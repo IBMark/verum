@@ -1,3 +1,4 @@
+pub mod app_security;
 pub mod chains;
 pub mod complexity;
 pub mod crate_semantics;
@@ -330,6 +331,7 @@ impl Prism {
         let mut dead_code_f: Vec<Finding> = Vec::new();
         let mut duplicates_r: (Vec<Finding>, Vec<DuplicateGroup>) = (Vec::new(), Vec::new());
         let mut security_f: Vec<Finding> = Vec::new();
+        let mut app_security_f: Vec<Finding> = Vec::new();
         let mut crypto_hygiene_f: Vec<Finding> = Vec::new();
         let mut taint_f: Vec<Finding> = Vec::new();
         let mut naming_f: Vec<Finding> = Vec::new();
@@ -367,6 +369,12 @@ impl Prism {
                 security_f = prof!(
                     "security",
                     security::analyse_with_context(ir, &standard.security, scan_ctx_ref)
+                )
+            });
+            s.spawn(|_| {
+                app_security_f = prof!(
+                    "app_security",
+                    app_security::analyse_with_context(ir, scan_ctx_ref)
                 )
             });
             s.spawn(|_| {
@@ -411,6 +419,7 @@ impl Prism {
         findings.extend(dead_code_f);
         findings.extend(dup_findings);
         findings.extend(security_f);
+        findings.extend(app_security_f);
         findings.extend(crypto_hygiene_f);
         findings.extend(taint_f);
         findings.extend(naming_f);
