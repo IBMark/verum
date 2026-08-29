@@ -390,6 +390,19 @@ pub enum FindingKind {
     /// the classic async deadlock / `!Send` future bug: the task can be
     /// suspended and resumed on another thread while holding the guard.
     LockAcrossAwait,
+    // Python insights - unscored correctness/hygiene defects.
+    /// A mutable literal (`[]`, `{}`, `set()`, `dict()`, `list()`) as a
+    /// default argument - evaluated once at `def` time, so every call that
+    /// omits the argument shares ONE object and mutations leak between calls.
+    MutableDefaultArg,
+    /// A bare `except:` or `except Exception:` whose entire body is `pass` -
+    /// every error on the covered path, including the ones that mean the
+    /// operation failed, disappears without a trace.
+    SwallowedException,
+    /// An `assert` used to validate request/user input - `python -O` strips
+    /// asserts wholesale, so the check silently vanishes in any deployment
+    /// that enables optimizations.
+    AssertAsValidation,
     // Transport / protocol correctness - scored.
     /// One logical message emitted as multiple write calls on a datagram
     /// transport (e.g. a length prefix and payload written separately).
@@ -507,6 +520,9 @@ impl FindingKind {
             FindingKind::HotPathAllocation => "HotPathAllocation",
             FindingKind::LockOnHotPath => "LockOnHotPath",
             FindingKind::LockAcrossAwait => "LockAcrossAwait",
+            FindingKind::MutableDefaultArg => "MutableDefaultArg",
+            FindingKind::SwallowedException => "SwallowedException",
+            FindingKind::AssertAsValidation => "AssertAsValidation",
             FindingKind::PathTraversal => "PathTraversal",
             FindingKind::VulnerableDependency => "VulnerableDependency",
             FindingKind::UnmaintainedDependency => "UnmaintainedDependency",

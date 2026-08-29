@@ -38,6 +38,37 @@ All notable changes to this project are documented here. The format is based on
   built from non-literal text.
 - All of the above verified against the 22-repo false-positive corpus with
   zero new findings.
+- **Python taint sinks in the daisychain map.** The sink catalogs behind
+  `DangerousChain` were PHP-first; Python chains now terminate at real
+  Python sinks, every generic name receiver-gated so precision holds:
+  - SQL: `execute`/`executemany`/`executescript` only behind a
+    storage-hinted receiver (`cursor.execute`, `conn.executemany` - never
+    `executor.execute` from a thread pool), plus module-qualified
+    `sqlalchemy.text`.
+  - Exec: the `subprocess` family - `run`/`call` require `subprocess` in
+    the qualified name, the subprocess-only names (`check_call`,
+    `check_output`, `getoutput`) keep their from-import recall - and
+    `os.execv*`/`os.spawn*` behind the `os` receiver.
+  - SSRF: `urlopen`, and `get`/`post`/`put`/`patch`/`delete`/`request` only
+    when the receiver IS a client module (`requests`, `httpx`, `aiohttp` -
+    `self.client.get` stays silent).
+  - Deletion: `os.remove`/`os.unlink`/`shutil.rmtree`, module-gated so
+    `items.remove(x)` stays a list op.
+- **Python insights pass (`python_insights`).** Line-scanning detectors for
+  the traps that read as reasonable Python:
+  - `BlockingInAsync` (existing kind) extends to `async def`: `time.sleep`,
+    module-level `requests.`/`urllib.request.urlopen`/blocking `socket.`
+    calls, and the `subprocess` family; lines mentioning `await`,
+    `asyncio.sleep`, `run_in_executor`, or `to_thread` are excluded.
+  - **`MutableDefaultArg` (Medium).** `def f(x=[])`, `={}`, `=set()`,
+    `=dict()`, `=list()` - evaluated once at `def` time and shared by every
+    call. Only single-line signatures, only the empty literals.
+  - **`SwallowedException` (Medium).** A bare `except:`/`except Exception:`
+    whose entire body is `pass`; handlers that log, re-raise, or name a
+    specific exception type are never flagged.
+  - **`AssertAsValidation` (Low).** `assert` on request/input-shaped
+    identifiers in non-test functions - stripped under `python -O`. Test
+    files are skipped and `is not None` narrowing is excluded.
 
 ## [0.1.6] - 2026-08-20
 

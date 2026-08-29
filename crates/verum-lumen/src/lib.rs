@@ -16,6 +16,7 @@ pub mod lcov;
 pub mod loc;
 pub mod naming;
 pub mod performance;
+pub mod python_insights;
 pub mod rbac;
 pub mod reachability;
 pub mod rust_insights;
@@ -339,6 +340,7 @@ impl Prism {
         let mut complexity_f: Vec<Finding> = Vec::new();
         let mut performance_f: Vec<Finding> = Vec::new();
         let mut rust_insights_f: Vec<Finding> = Vec::new();
+        let mut python_insights_f: Vec<Finding> = Vec::new();
         let mut transport_f: Vec<Finding> = Vec::new();
         let mut rbac_f: Vec<Finding> = Vec::new();
         let mut infrastructure_f: Vec<Finding> = Vec::new();
@@ -396,6 +398,12 @@ impl Prism {
                 )
             });
             s.spawn(|_| {
+                python_insights_f = prof!(
+                    "python_insights",
+                    python_insights::analyse_with_context(ir, scan_ctx_ref)
+                )
+            });
+            s.spawn(|_| {
                 transport_f = prof!(
                     "transport",
                     transport::analyse_with_context(ir, scan_ctx_ref)
@@ -427,6 +435,7 @@ impl Prism {
         findings.extend(complexity_f);
         findings.extend(performance_f);
         findings.extend(rust_insights_f);
+        findings.extend(python_insights_f);
         findings.extend(transport_f);
         findings.extend(rbac_f);
         findings.extend(infrastructure_f);

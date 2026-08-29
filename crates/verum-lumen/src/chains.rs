@@ -528,7 +528,93 @@ const STORAGE_HINTS: &[&str] = &[
     "registry",
     "queue",
     "index",
+    "cursor",
 ];
+
+/// True when a dotted call's receiver carries a storage hint (`self.db.delete`,
+/// `cursor.execute`). PHP arrow calls (`->`) are excluded - their idioms keep
+/// their recall through the PHP name catalogs instead.
+fn storage_receiver(n: &str) -> bool {
+    n.contains('.')
+        && !n.contains("->")
+        && n.rsplit_once('.')
+            .map(|(r, _)| STORAGE_HINTS.iter().any(|h| r.contains(h)))
+            .unwrap_or(false)
+}
+
+/// Python-only sinks whose names are too generic to catalog bare. Every entry
+/// is receiver-gated, in the same spirit as `AMBIGUOUS_DEL`: `execute` is a
+/// SQL sink only on a storage-hinted receiver (`cursor.execute`,
+/// `conn.executemany` - never `executor.execute` from a thread pool), the
+/// HTTP verbs only when the receiver IS a client module (`requests.get` -
+/// never `self.client.get`, which is as often gRPC or a fake), and the
+/// `subprocess`/`os`/`shutil` families only on their module receiver.
+/// Precision over recall throughout: a bare `run(` or `get(` is ubiquitous
+/// and never classified. Returning `None` falls back to the shared
+/// catalogs, which is harmless - none of these names appear there except
+/// `delete` (whose `AMBIGUOUS_DEL` storage gating is exactly what a
+/// non-client receiver should get) and `popen` (a genuine exec in any
+/// catalog language).
+fn classify_python_sink(n: &str) -> Option<SinkKind> {
+    let seg = last_segment(n);
+    let receiver = n.rsplit_once('.').map(|(r, _)| r).unwrap_or("");
+
+    // DB-API cursor/connection execute. `executemany`/`executescript` are
+    // rarer but no less generic (`executor.executemany` batches tasks), so
+    // all three take the storage gate.
+    if matches!(seg, "execute" | "executemany" | "executescript") && storage_receiver(n) {
+        return Some(SinkKind::Sql);
+    }
+    // SQLAlchemy textual SQL - only the module-qualified spelling is precise
+    // enough. Bare `text(` names everything from templating to tokenizers,
+    // so the common from-import spelling is deliberately missed.
+    if seg == "text" && receiver == "sqlalchemy" {
+        return Some(SinkKind::Sql);
+    }
+    // The subprocess family. `run`/`call` are the most generic names in the
+    // language, so the qualified name must say `subprocess`; the from-import
+    // spellings of the names that exist nowhere else keep their recall bare.
+    const SUBPROCESS_FAMILY: &[&str] = &[
+        "run",
+        "call",
+        "check_call",
+        "check_output",
+        "popen",
+        "getoutput",
+    ];
+    if SUBPROCESS_FAMILY.contains(&seg) {
+        if n.contains("subprocess") {
+            return Some(SinkKind::Exec);
+        }
+        if receiver.is_empty() && matches!(seg, "check_call" | "check_output" | "getoutput") {
+            return Some(SinkKind::Exec);
+        }
+    }
+    // `os.execv*`/`os.spawn*` replace or fork the process image. Gated on the
+    // `os` receiver: a method named `execvp` on anything else is somebody's
+    // wrapper, and flagging wrappers is the caller's walk to do.
+    if receiver == "os" && (seg.starts_with("exec") || seg.starts_with("spawn")) {
+        return Some(SinkKind::Exec);
+    }
+    // Outbound HTTP. `urlopen` exists only in urllib, so it carries alone;
+    // the client-library verbs fire only when the receiver IS the module.
+    if seg == "urlopen" {
+        return Some(SinkKind::Ssrf);
+    }
+    if matches!(seg, "get" | "post" | "put" | "patch" | "delete" | "request")
+        && matches!(receiver, "requests" | "httpx" | "aiohttp")
+    {
+        return Some(SinkKind::Ssrf);
+    }
+    // Filesystem deletion, module-gated: `items.remove(x)` is a list op.
+    if receiver == "os" && matches!(seg, "remove" | "unlink" | "removedirs") {
+        return Some(SinkKind::Deletion);
+    }
+    if receiver == "shutil" && seg == "rmtree" {
+        return Some(SinkKind::Deletion);
+    }
+    None
+}
 
 fn classify_sink(name: &str, lang: &Language) -> Option<SinkKind> {
     let n = name.to_ascii_lowercase();
@@ -608,18 +694,21 @@ fn classify_sink(name: &str, lang: &Language) -> Option<SinkKind> {
     if HARD_DEL.contains(&seg) {
         return Some(SinkKind::Deletion);
     }
+    // Python's dangerous callables hide behind the most generic names in the
+    // language (`execute`, `run`, `get`), so they are classified by receiver,
+    // never by name alone. Checked before AMBIGUOUS_DEL so `requests.delete`
+    // reads as the outbound HTTP call it is, not as a deletion verb.
+    if matches!(lang, Language::Python) {
+        if let Some(kind) = classify_python_sink(&n) {
+            return Some(kind);
+        }
+    }
     if AMBIGUOUS_DEL.contains(&seg) {
         // Storage-hinted receiver ⇒ an ORM delete (`self.db.delete()`). NOT for
         // JS/TS: there `.delete(key)` is `Map`/`Set`/`WeakMap` removal, and a
         // collection named `beamStore`/`sessionCache` matches a storage hint by
         // coincidence - a Map delete is not a destructive DB op.
-        let storage_receiver = !matches!(lang, Language::JavaScript | Language::TypeScript)
-            && n.contains('.')
-            && !n.contains("->")
-            && n.rsplit_once('.')
-                .map(|(r, _)| STORAGE_HINTS.iter().any(|h| r.contains(h)))
-                .unwrap_or(false);
-        if storage_receiver {
+        if !matches!(lang, Language::JavaScript | Language::TypeScript) && storage_receiver(&n) {
             return Some(SinkKind::Deletion);
         }
         if !matches!(lang, Language::Php) {
@@ -884,6 +973,169 @@ mod tests {
             classify_sink("self.db.delete", &Language::Rust),
             Some(SinkKind::Deletion)
         ));
+    }
+
+    /// Python DB-API `execute` fires only behind a storage-hinted receiver -
+    /// a thread pool's `executor.execute` shares the name and must not flag.
+    #[test]
+    fn python_execute_is_receiver_gated() {
+        let py = &Language::Python;
+        assert!(matches!(
+            classify_sink("cursor.execute", py),
+            Some(SinkKind::Sql)
+        ));
+        assert!(matches!(
+            classify_sink("self.db.execute", py),
+            Some(SinkKind::Sql)
+        ));
+        assert!(matches!(
+            classify_sink("conn.executemany", py),
+            Some(SinkKind::Sql)
+        ));
+        assert!(matches!(
+            classify_sink("connection.executescript", py),
+            Some(SinkKind::Sql)
+        ));
+        assert!(matches!(
+            classify_sink("session.execute", py),
+            Some(SinkKind::Sql)
+        ));
+        // The generic spellings stay silent: bare from-import, thread pools.
+        assert!(classify_sink("execute", py).is_none());
+        assert!(classify_sink("executor.execute", py).is_none());
+        assert!(classify_sink("self.executor.executemany", py).is_none());
+        // And the gate is Python-only - a Rust method named `execute` is not
+        // a DB-API cursor even behind a hinted receiver name.
+        assert!(classify_sink("cursor.execute", &Language::Rust).is_none());
+        // SQLAlchemy `text` only in its module-qualified spelling.
+        assert!(matches!(
+            classify_sink("sqlalchemy.text", py),
+            Some(SinkKind::Sql)
+        ));
+        assert!(classify_sink("text", py).is_none());
+        assert!(classify_sink("self.text", py).is_none());
+    }
+
+    /// The subprocess family: `run`/`call` need `subprocess` in the qualified
+    /// name; the names that exist nowhere else keep their from-import recall.
+    #[test]
+    fn python_subprocess_family_is_module_gated() {
+        let py = &Language::Python;
+        assert!(matches!(
+            classify_sink("subprocess.run", py),
+            Some(SinkKind::Exec)
+        ));
+        assert!(matches!(
+            classify_sink("subprocess.call", py),
+            Some(SinkKind::Exec)
+        ));
+        assert!(matches!(
+            classify_sink("subprocess.check_output", py),
+            Some(SinkKind::Exec)
+        ));
+        assert!(matches!(
+            classify_sink("subprocess.Popen", py),
+            Some(SinkKind::Exec)
+        ));
+        // From-import spellings of the subprocess-only names.
+        assert!(matches!(
+            classify_sink("check_output", py),
+            Some(SinkKind::Exec)
+        ));
+        assert!(matches!(
+            classify_sink("check_call", py),
+            Some(SinkKind::Exec)
+        ));
+        assert!(matches!(
+            classify_sink("getoutput", py),
+            Some(SinkKind::Exec)
+        ));
+        // Bare `run`/`call` are everywhere and must never flag.
+        assert!(classify_sink("run", py).is_none());
+        assert!(classify_sink("call", py).is_none());
+        assert!(classify_sink("app.run", py).is_none());
+        assert!(classify_sink("loop.run", py).is_none());
+        // os.exec*/os.spawn* replace the process image; wrappers do not.
+        assert!(matches!(
+            classify_sink("os.execvp", py),
+            Some(SinkKind::Exec)
+        ));
+        assert!(matches!(
+            classify_sink("os.spawnl", py),
+            Some(SinkKind::Exec)
+        ));
+        assert!(classify_sink("runner.execvp", py).is_none());
+        // Rust/Go methods named `run` stay out regardless.
+        assert!(classify_sink("subprocess.run", &Language::Rust).is_none());
+    }
+
+    /// HTTP verbs fire only when the receiver IS a client module - a `get` on
+    /// anything else (`self.client.get`, `settings.get`) is a lookup.
+    #[test]
+    fn python_http_verbs_need_a_client_module_receiver() {
+        let py = &Language::Python;
+        assert!(matches!(
+            classify_sink("requests.get", py),
+            Some(SinkKind::Ssrf)
+        ));
+        assert!(matches!(
+            classify_sink("requests.post", py),
+            Some(SinkKind::Ssrf)
+        ));
+        assert!(matches!(
+            classify_sink("httpx.request", py),
+            Some(SinkKind::Ssrf)
+        ));
+        assert!(matches!(
+            classify_sink("aiohttp.request", py),
+            Some(SinkKind::Ssrf)
+        ));
+        // `requests.delete` is an outbound call, never a deletion verb.
+        assert!(matches!(
+            classify_sink("requests.delete", py),
+            Some(SinkKind::Ssrf)
+        ));
+        // urlopen exists only in urllib - it carries without a receiver.
+        assert!(matches!(classify_sink("urlopen", py), Some(SinkKind::Ssrf)));
+        assert!(matches!(
+            classify_sink("urllib.request.urlopen", py),
+            Some(SinkKind::Ssrf)
+        ));
+        // Everything the gate exists for.
+        assert!(classify_sink("get", py).is_none());
+        assert!(classify_sink("self.client.get", py).is_none());
+        assert!(classify_sink("settings.get", py).is_none());
+        assert!(classify_sink("headers.get", py).is_none());
+        assert!(classify_sink("requests.get", &Language::Rust).is_none());
+    }
+
+    /// Filesystem deletion is module-gated: `items.remove(x)` is a list op.
+    #[test]
+    fn python_fs_deletion_is_module_gated() {
+        let py = &Language::Python;
+        assert!(matches!(
+            classify_sink("os.remove", py),
+            Some(SinkKind::Deletion)
+        ));
+        assert!(matches!(
+            classify_sink("shutil.rmtree", py),
+            Some(SinkKind::Deletion)
+        ));
+        // `unlink` is unambiguous in any language via HARD_DEL.
+        assert!(matches!(
+            classify_sink("os.unlink", py),
+            Some(SinkKind::Deletion)
+        ));
+        assert!(classify_sink("remove", py).is_none());
+        assert!(classify_sink("items.remove", py).is_none());
+        assert!(classify_sink("rmtree", py).is_none());
+        // The Python receiver gate must not disturb the shared AMBIGUOUS_DEL
+        // storage logic: an ORM delete still counts, a plain attr does not.
+        assert!(matches!(
+            classify_sink("session.delete", py),
+            Some(SinkKind::Deletion)
+        ));
+        assert!(classify_sink("self.pending.delete", py).is_none());
     }
 
     fn test_symbol(

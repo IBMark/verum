@@ -433,6 +433,9 @@ pub(crate) fn kind_why(kind: &FindingKind) -> &'static str {
         HotPathAllocation => "Allocating per message puts the allocator on the hot path, costing throughput and adding latency jitter.",
         LockOnHotPath => "A blocking lock on the hot path serializes it, turning concurrency into contention.",
         LockAcrossAwait => "Holding a guard across .await can deadlock the executor and makes the future non-Send.",
+        MutableDefaultArg => "The default is created once at def time, so every call that omits the argument shares one object and mutations leak between calls.",
+        SwallowedException => "Every error on this path is silently discarded, so failures surface later, far from the cause, with the evidence gone.",
+        AssertAsValidation => "python -O strips asserts at compile time, so this validation silently stops existing in optimized deployments.",
         SplitDatagramMessage => "Datagrams have no byte-stream continuity: losing one piece shears the message and desynchronizes the receiver's parser.",
         OversizedDatagram => "Above the MTU the datagram travels as IP fragments, and losing any fragment loses the whole message.",
         UnvalidatedLengthPrefix => "A hostile or corrupt peer can supply a huge length and force enormous allocations or a stalled reader.",
@@ -626,6 +629,15 @@ pub(crate) fn fix_hint(f: &Finding, ir: &Ir, groups: &[DuplicateGroup], root: &P
         ),
         LockAcrossAwait => format!(
             "drop the guard before the .await at {spot} (scope it in a block), or switch to an async-aware lock"
+        ),
+        MutableDefaultArg => format!(
+            "default the parameter at {spot} to None and create the list/dict/set inside the function body (`if x is None: x = []`)"
+        ),
+        SwallowedException => format!(
+            "catch the specific exception you expect at {spot} and at minimum log it; let everything else propagate"
+        ),
+        AssertAsValidation => format!(
+            "replace the assert at {spot} with an explicit check that raises (`if not ...: raise ValueError(...)`) so it survives python -O"
         ),
         SplitDatagramMessage => format!(
             "assemble the length prefix and payload into one buffer and emit them in a single write call at {spot}"
@@ -895,6 +907,9 @@ mod tests {
             HotPathAllocation,
             LockOnHotPath,
             LockAcrossAwait,
+            MutableDefaultArg,
+            SwallowedException,
+            AssertAsValidation,
             SplitDatagramMessage,
             OversizedDatagram,
             UnvalidatedLengthPrefix,

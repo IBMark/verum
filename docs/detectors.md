@@ -4,7 +4,7 @@ Every finding Verum can report, what triggers it, why it matters, and when ignor
 
 This file is generated from the detector table in `crates/verum-nucleus/src/reference.rs`. Do not edit it by hand - run `verum explain --all --format markdown > docs/detectors.md` instead. A test fails if the two drift apart.
 
-67 detectors.
+70 detectors.
 
 ## Contents
 
@@ -96,6 +96,12 @@ This file is generated from the detector table in `crates/verum-nucleus/src/refe
 - [LockOnHotPath](#lockonhotpath) - A blocking lock taken on a latency-sensitive path
 - [LockAcrossAwait](#lockacrossawait) - A synchronous lock guard held across an `.await`
 - [MissingSafetyComment](#missingsafetycomment) - An `unsafe` block with no `// SAFETY:` justification
+
+**Python insights**
+
+- [MutableDefaultArg](#mutabledefaultarg) - A mutable literal as a Python default argument
+- [SwallowedException](#swallowedexception) - An except block that silently discards every error
+- [AssertAsValidation](#assertasvalidation) - Input validation that disappears under `python -O`
 
 **Transport**
 
@@ -1513,7 +1519,7 @@ let Ok(header) = Header::parse(&buf) else {
 A blocking call inside an async function  
 `blocking-in-async` | category: Rust insights
 
-**Detects.** A line inside an `async fn` containing `std::fs::`, `std::net::`, `thread::sleep`, `std::io::stdin`, `reqwest::blocking`, or a `.blocking_` method. Tokio's async mutexes are not blocking calls and are not flagged.
+**Detects.** A line inside an `async fn` containing `std::fs::`, `std::net::`, `thread::sleep`, `std::io::stdin`, `reqwest::blocking`, or a `.blocking_` method. Tokio's async mutexes are not blocking calls and are not flagged. In Python, a line inside an `async def` calling `time.sleep(`, a module-level `requests.`/`urllib.request.urlopen(` HTTP call, a blocking `socket.` connect/DNS call, or the `subprocess` family; lines mentioning `await`, `asyncio.sleep`, `run_in_executor`, or `to_thread` are excluded as already offloaded.
 
 **Why it matters.** The executor thread cannot be preempted. One blocking read stalls every other task scheduled on that thread, so a single slow disk or DNS lookup shows up as tail latency across unrelated requests.
 
@@ -1649,6 +1655,96 @@ self.state.lock().unwrap().value = value;
 ```
 
 **Reasonable to suppress.** Essentially never for a synchronous guard. If the lock must span the await, use an async-aware mutex, which is not flagged.
+
+---
+
+## MutableDefaultArg
+
+A mutable literal as a Python default argument  
+`mutable-default-arg` | category: Python insights
+
+**Detects.** A `def` whose signature defaults a parameter to `[]`, `{}`, `set()`, `dict()`, or `list()`. Only single-line signatures are scanned, and the literal must follow the `=` directly, so a default that merely contains brackets inside a string never matches.
+
+**Why it matters.** Python evaluates a default once, at `def` time, not per call. Every call that omits the argument shares that single object, so an append in one call shows up in the next - state leaking between requests that looks like a heisenbug and only reproduces under load.
+
+**Flagged**
+
+```python
+def add_tag(tag, tags=[]):
+    tags.append(tag)      # shared across every call
+    return tags
+```
+
+**Fixed**
+
+```python
+def add_tag(tag, tags=None):
+    if tags is None:
+        tags = []
+    tags.append(tag)
+    return tags
+```
+
+**Reasonable to suppress.** The function provably never mutates the default (it is read-only documentation of the shape) - and even then `None` costs nothing and removes the trap for the next editor.
+
+---
+
+## SwallowedException
+
+An except block that silently discards every error  
+`swallowed-exception` | category: Python insights
+
+**Detects.** A bare `except:`, `except Exception:`, or `except BaseException:` clause (with or without `as name`) whose entire body is `pass`. A handler that logs, re-raises, sets a flag, or catches a *specific* exception type is never flagged.
+
+**Why it matters.** The covered path can fail for any reason - a typo'd attribute, a broken connection, a corrupted file - and the program continues as if it succeeded. The failure surfaces later, far from the cause, with the evidence already discarded.
+
+**Flagged**
+
+```python
+try:
+    publish(event)
+except Exception:
+    pass
+```
+
+**Fixed**
+
+```python
+try:
+    publish(event)
+except ConnectionError:
+    logger.warning("event dropped: broker unreachable")
+```
+
+**Reasonable to suppress.** The operation is genuinely best-effort AND failure is expected in normal operation (probing an optional feature) - say so with a comment or a `contextlib.suppress(SpecificError)` that names the exception.
+
+---
+
+## AssertAsValidation
+
+Input validation that disappears under `python -O`  
+`assert-as-validation` | category: Python insights
+
+**Detects.** An `assert` statement inside a non-test Python function whose condition references request/input-shaped identifiers (`request`, `params`, `payload`, `user_input`, `form_data`). Test files (`test_*`, `tests/`, `conftest.py`) are skipped entirely, and `assert x is not None` type-narrowing asserts are excluded.
+
+**Why it matters.** `python -O` and `PYTHONOPTIMIZE` strip every assert at compile time. A validation check written as an assert passes every test run and then silently stops existing in any optimized deployment - the input arrives unchecked exactly where it was supposedly validated.
+
+**Flagged**
+
+```python
+def transfer(request):
+    assert request.form["amount"].isdigit()
+```
+
+**Fixed**
+
+```python
+def transfer(request):
+    if not request.form["amount"].isdigit():
+        raise BadRequest("amount must be a number")
+```
+
+**Reasonable to suppress.** The assert states an internal invariant about the caller's contract, not a check on external input - the identifier match read an internal variable's name as request-shaped.
 
 ---
 

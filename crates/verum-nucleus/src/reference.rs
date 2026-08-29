@@ -1510,7 +1510,12 @@ detector_table! {
         summary: "A blocking call inside an async function",
         detects: "A line inside an `async fn` containing `std::fs::`, `std::net::`, \
                   `thread::sleep`, `std::io::stdin`, `reqwest::blocking`, or a `.blocking_` \
-                  method. Tokio's async mutexes are not blocking calls and are not flagged.",
+                  method. Tokio's async mutexes are not blocking calls and are not flagged. \
+                  In Python, a line inside an `async def` calling `time.sleep(`, a \
+                  module-level `requests.`/`urllib.request.urlopen(` HTTP call, a blocking \
+                  `socket.` connect/DNS call, or the `subprocess` family; lines mentioning \
+                  `await`, `asyncio.sleep`, `run_in_executor`, or `to_thread` are excluded \
+                  as already offloaded.",
         why: "The executor thread cannot be preempted. One blocking read stalls every other \
               task scheduled on that thread, so a single slow disk or DNS lookup shows up as \
               tail latency across unrelated requests.",
@@ -1628,6 +1633,91 @@ detector_table! {
         "#,
         suppress: "Essentially never for a synchronous guard. If the lock must span the await, \
                    use an async-aware mutex, which is not flagged.",
+    }
+
+    MutableDefaultArg {
+        category: "Python insights",
+        summary: "A mutable literal as a Python default argument",
+        detects: "A `def` whose signature defaults a parameter to `[]`, `{}`, `set()`, \
+                  `dict()`, or `list()`. Only single-line signatures are scanned, and the \
+                  literal must follow the `=` directly, so a default that merely contains \
+                  brackets inside a string never matches.",
+        why: "Python evaluates a default once, at `def` time, not per call. Every call that \
+              omits the argument shares that single object, so an append in one call shows \
+              up in the next - state leaking between requests that looks like a heisenbug \
+              and only reproduces under load.",
+        lang: "python",
+        bad: r#"
+            def add_tag(tag, tags=[]):
+                tags.append(tag)      # shared across every call
+                return tags
+        "#,
+        good: r#"
+            def add_tag(tag, tags=None):
+                if tags is None:
+                    tags = []
+                tags.append(tag)
+                return tags
+        "#,
+        suppress: "The function provably never mutates the default (it is read-only \
+                   documentation of the shape) - and even then `None` costs nothing and \
+                   removes the trap for the next editor.",
+    }
+
+    SwallowedException {
+        category: "Python insights",
+        summary: "An except block that silently discards every error",
+        detects: "A bare `except:`, `except Exception:`, or `except BaseException:` clause \
+                  (with or without `as name`) whose entire body is `pass`. A handler that \
+                  logs, re-raises, sets a flag, or catches a *specific* exception type is \
+                  never flagged.",
+        why: "The covered path can fail for any reason - a typo'd attribute, a broken \
+              connection, a corrupted file - and the program continues as if it succeeded. \
+              The failure surfaces later, far from the cause, with the evidence already \
+              discarded.",
+        lang: "python",
+        bad: r#"
+            try:
+                publish(event)
+            except Exception:
+                pass
+        "#,
+        good: r#"
+            try:
+                publish(event)
+            except ConnectionError:
+                logger.warning("event dropped: broker unreachable")
+        "#,
+        suppress: "The operation is genuinely best-effort AND failure is expected in normal \
+                   operation (probing an optional feature) - say so with a comment or a \
+                   `contextlib.suppress(SpecificError)` that names the exception.",
+    }
+
+    AssertAsValidation {
+        category: "Python insights",
+        summary: "Input validation that disappears under `python -O`",
+        detects: "An `assert` statement inside a non-test Python function whose condition \
+                  references request/input-shaped identifiers (`request`, `params`, \
+                  `payload`, `user_input`, `form_data`). Test files (`test_*`, `tests/`, \
+                  `conftest.py`) are skipped entirely, and `assert x is not None` \
+                  type-narrowing asserts are excluded.",
+        why: "`python -O` and `PYTHONOPTIMIZE` strip every assert at compile time. A \
+              validation check written as an assert passes every test run and then silently \
+              stops existing in any optimized deployment - the input arrives unchecked \
+              exactly where it was supposedly validated.",
+        lang: "python",
+        bad: r#"
+            def transfer(request):
+                assert request.form["amount"].isdigit()
+        "#,
+        good: r#"
+            def transfer(request):
+                if not request.form["amount"].isdigit():
+                    raise BadRequest("amount must be a number")
+        "#,
+        suppress: "The assert states an internal invariant about the caller's contract, not \
+                   a check on external input - the identifier match read an internal \
+                   variable's name as request-shaped.",
     }
 
     SplitDatagramMessage {
