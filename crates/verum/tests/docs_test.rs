@@ -39,7 +39,11 @@ fn run_verum(args: &[&str]) -> std::process::Output {
 
 fn read(rel: &str) -> String {
     let path = repo_root().join(rel);
-    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+    let text =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    // Windows runners check the repo out with CRLF endings; every assertion
+    // below reasons about `\n`-delimited structure, so normalise here.
+    text.replace("\r\n", "\n")
 }
 
 // ---------------------------------------------------------------------------
