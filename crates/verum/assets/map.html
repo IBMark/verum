@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Axiom System Map</title>
+<title>Verum System Map</title>
 <style>
   :root {
     color-scheme: light;
@@ -150,7 +150,7 @@
 </head>
 <body>
 <header>
-  <h1>Axiom System Map</h1>
+  <h1>Verum System Map</h1>
   <span class="sub" id="meta-line"></span>
   <button id="theme-toggle" type="button">Theme</button>
 </header>
@@ -221,11 +221,11 @@
   </div>
 </main>
 
-<script id="axiom-map-data" type="application/json">__AXIOM_MAP_DATA__</script>
+<script id="verum-map-data" type="application/json">__VERUM_MAP_DATA__</script>
 <script>
 (function () {
   "use strict";
-  const D = JSON.parse(document.getElementById("axiom-map-data").textContent);
+  const D = JSON.parse(document.getElementById("verum-map-data").textContent);
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;

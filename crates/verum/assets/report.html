@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Axiom Report</title>
+<title>Verum Report</title>
 <style>
   :root {
     color-scheme: light;
@@ -108,7 +108,7 @@
 </head>
 <body>
 <header>
-  <h1>Axiom Report</h1>
+  <h1>Verum Report</h1>
   <span class="sub" id="meta-line"></span>
   <button id="theme-toggle" type="button">Theme</button>
 </header>
@@ -174,11 +174,11 @@
 
 <footer id="foot"></footer>
 
-<script id="axiom-data" type="application/json">__AXIOM_DATA__</script>
+<script id="verum-data" type="application/json">__VERUM_DATA__</script>
 <script>
 (function () {
   "use strict";
-  const data = JSON.parse(document.getElementById("axiom-data").textContent);
+  const data = JSON.parse(document.getElementById("verum-data").textContent);
 
   // Theme toggle: stamp data-theme so it wins over the OS preference.
   const toggle = document.getElementById("theme-toggle");
@@ -222,7 +222,7 @@
   document.getElementById("root-line").innerHTML =
     `<code>${esc(data.root)}</code> — generated ${new Date(data.generated_epoch * 1000).toLocaleString()}`;
   document.getElementById("foot").textContent =
-    `Axiom ${data.version} · ${data.meta.calls.toLocaleString()} calls mapped · ${data.meta.routes} routes · ${data.meta.entry_points} entry points · build ${data.meta.build_ms} ms`;
+    `Verum ${data.version} · ${data.meta.calls.toLocaleString()} calls mapped · ${data.meta.routes} routes · ${data.meta.entry_points} entry points · build ${data.meta.build_ms} ms`;
 
   // Gate banner
   const gate = document.getElementById("gate-section");
