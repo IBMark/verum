@@ -1,0 +1,21 @@
+# Smithery deployment spec: build the repository Dockerfile and serve
+# `verum mcp` over stdio. https://smithery.ai/docs
+runtime: container
+build:
+  dockerfile: Dockerfile
+  dockerBuildPath: .
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties:
+      projectPath:
+        type: string
+        description:
+          Directory of the codebase to analyse. Defaults to the container's
+          working directory.
+    required: []
+  commandFunction: |-
+    (config) => ({ command: 'verum', args: ['mcp', config.projectPath || '/work'] })
+  exampleConfig:
+    projectPath: /work

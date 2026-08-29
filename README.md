@@ -166,6 +166,12 @@ Any MCP-capable client can connect over stdio. For example, with Claude Code:
 claude mcp add verum -- verum mcp /path/to/project
 ```
 
+Registry listing (the token below is how the [official MCP
+registry](https://modelcontextprotocol.io) verifies this crate belongs to the
+listed server):
+
+- mcp-name: io.github.ibmark/verum
+
 ## For coding agents & CI
 
 [`docs/agents.md`](docs/agents.md) is the command reference written to be read

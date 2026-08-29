@@ -1,0 +1,44 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.ibmark/verum",
+  "description": "Deterministic multi-language code analysis: call graphs, dead code, duplicates, security findings.",
+  "repository": {
+    "url": "https://github.com/IBMark/verum",
+    "source": "github"
+  },
+  "version": "0.1.6",
+  "packages": [
+    {
+      "registryType": "cargo",
+      "registryBaseUrl": "https://crates.io",
+      "identifier": "verum",
+      "version": "0.1.6",
+      "transport": { "type": "stdio" },
+      "packageArguments": [
+        { "type": "positional", "value": "mcp", "isRequired": true },
+        {
+          "type": "positional",
+          "valueHint": "project_dir",
+          "description": "Path of the codebase to analyse",
+          "default": ".",
+          "isRequired": false
+        }
+      ]
+    },
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/ibmark/verum:0.1.6",
+      "transport": { "type": "stdio" },
+      "packageArguments": [
+        { "type": "positional", "value": "mcp", "isRequired": true },
+        {
+          "type": "positional",
+          "valueHint": "project_dir",
+          "description": "Path of the mounted codebase to analyse",
+          "default": "/work",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}

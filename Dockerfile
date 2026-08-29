@@ -8,6 +8,8 @@ FROM debian:stable-slim
 LABEL org.opencontainers.image.source="https://github.com/IBMark/verum"
 LABEL org.opencontainers.image.description="Deterministic, whole-program, multi-language code analyzer"
 LABEL org.opencontainers.image.licenses="MIT OR Apache-2.0"
+# Ownership proof for the official MCP registry: must match server.json's name.
+LABEL io.modelcontextprotocol.server.name="io.github.ibmark/verum"
 COPY --from=build /src/target/release/verum /usr/local/bin/verum
 WORKDIR /work
 ENTRYPOINT ["verum"]
