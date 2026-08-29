@@ -164,6 +164,13 @@ pub fn resolve_root(ir: &Ir, root: Option<&Path>) -> PathBuf {
         if ir.files.keys().all(|path| path.starts_with(&canonical)) {
             return canonical;
         }
+        // On Windows `canonicalize` returns a `\\?\`-prefixed verbatim path
+        // while the IR walked the root as the caller spelled it, so the two
+        // never prefix-match. Give the root as given the same chance before
+        // the common-ancestor fallback swallows a shared directory (`src/`).
+        if ir.files.keys().all(|path| path.starts_with(root)) {
+            return root.to_path_buf();
+        }
     }
     common_root(ir)
 }
