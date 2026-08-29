@@ -1,0 +1,6 @@
+# Check text files out with LF everywhere. Several tests byte-compare
+# committed files against generated output (docs/detectors.md, the
+# integration snippets), and CRLF checkouts on Windows runners broke them.
+* text=auto eol=lf
+*.gif binary
+*.png binary
